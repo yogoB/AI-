@@ -1,4 +1,49 @@
+# Local documentation (only the root README is shared)
+*.[mM][dD]
+!/README.md
+
+# Environment values and credentials; keep the empty template
 .env
+.env.*
+!.env.example
+.envrc
+.netrc
+.aws/
+.ssh/
+secrets/
+credentials/
+credentials*.json
+service-account*.json
+service_account*.json
+client_secret*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+
+# Local user data, logs and backups
+uploads/
+evaluations/local/
+screenshots/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.bak
+*.orig
+*.swp
+*~
+
+# Python and local tooling
 __pycache__/
 *.pyc
 .venv/
@@ -7,3 +52,6 @@ __pycache__/
 graphify-out/
 .DS_Store
 .idea/
+.codex/
+.agents/
+.claude/

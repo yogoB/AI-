@@ -16,7 +16,7 @@ UNKNOWN_OPTIONAL = {
     "hasFamilyBundle": None,
 }
 GOOD_RESULT = {"required": REQUIRED, "confidence": 0.92}
-QUESTION = "월 데이터 사용량과 이용하고 싶은 구독 서비스를 알려주시겠어요?"
+QUESTION = "추천에 사용할 월 데이터 용량을 1GB 이상의 정수로, 원하는 구독 서비스를 1개 이상 알려주시겠어요?"
 TEXT = "데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요"
 
 
@@ -39,8 +39,8 @@ TEXT = "데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요"
              "clarifyingQuestion": QUESTION},
         ),
         (
-            {"required": {"monthlyDataGb": 0, "wantedServiceIds": []}, "confidence": 1},
-            {"required": {"monthlyDataGb": 0, "wantedServiceIds": []}, "optional": UNKNOWN_OPTIONAL,
+            {"required": {"monthlyDataGb": 1, "wantedServiceIds": [6]}, "confidence": 1},
+            {"required": {"monthlyDataGb": 1, "wantedServiceIds": [6]}, "optional": UNKNOWN_OPTIONAL,
              "confidence": 1, "clarifyingQuestion": None},
         ),
     ],
@@ -66,11 +66,13 @@ def test_parse_contract(result, expected):
         patch("app.llm.client.AsyncClient", side_effect=lambda **kw: httpx.AsyncClient(
             transport=httpx.MockTransport(respond), **kw
         )),
-        TestClient(app) as api,
+        TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api,
     ):
         response = api.post("/parse", json={"text": TEXT})
     assert response.status_code == 200
     assert response.json() == expected
+    if expected["required"] is not None:
+        assert type(response.json()["required"]["monthlyDataGb"]) is int
 
 
 @pytest.mark.parametrize("result", [
@@ -81,7 +83,12 @@ def test_parse_contract(result, expected):
     {"confidence": 0.9},
     {**GOOD_RESULT, "clarifyingQuestion": "데이터는 얼마나 쓰시나요?"},
     {**GOOD_RESULT, "required": {"monthlyDataGb": -1, "wantedServiceIds": [1]}},
+    {**GOOD_RESULT, "required": {"monthlyDataGb": 0, "wantedServiceIds": [1]}},
+    {**GOOD_RESULT, "required": {"monthlyDataGb": 18.4, "wantedServiceIds": [1]}},
+    {**GOOD_RESULT, "required": {"monthlyDataGb": 20.0, "wantedServiceIds": [1]}},
+    {**GOOD_RESULT, "required": {"monthlyDataGb": 2147483648, "wantedServiceIds": [1]}},
     {**GOOD_RESULT, "required": {"monthlyDataGb": True, "wantedServiceIds": [1]}},
+    {**GOOD_RESULT, "required": {"monthlyDataGb": 20, "wantedServiceIds": []}},
     {**GOOD_RESULT, "required": {"monthlyDataGb": 20, "wantedServiceIds": [7]}},
     {**GOOD_RESULT, "required": {"monthlyDataGb": 20, "wantedServiceIds": [True]}},
     {**GOOD_RESULT, "required": {"monthlyDataGb": 20}},
@@ -93,7 +100,7 @@ def test_parse_contract(result, expected):
 def test_invalid_extraction_returns_clarification(result):
     with (
         patch("app.llm.client.complete", return_value=result),
-        TestClient(app) as api,
+        TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api,
     ):
         response = api.post("/parse", json={"text": TEXT})
     assert response.status_code == 502
@@ -107,7 +114,7 @@ def test_invalid_extraction_returns_clarification(result):
     {"text": "가" * 4001}, {"text": TEXT, "history": ["이전 발화"]},
 ])
 def test_invalid_request_never_calls_model(body):
-    with patch("app.llm.client.complete") as complete, TestClient(app) as api:
+    with patch("app.llm.client.complete") as complete, TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
         response = api.post("/parse", json=body)
         complete.assert_not_called()
     assert response.status_code == 422
@@ -135,7 +142,7 @@ def test_upstream_failure_is_safe(payload, status, expected_status, code):
         patch("app.llm.client.AsyncClient", side_effect=lambda **kw: httpx.AsyncClient(
             transport=httpx.MockTransport(respond), **kw
         )),
-        TestClient(app) as api,
+        TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api,
     ):
         response = api.post("/parse", json={"text": TEXT})
     assert response.status_code == expected_status
@@ -155,7 +162,7 @@ def test_timeout_and_missing_key():
         patch("app.llm.client.AsyncClient", side_effect=lambda **kw: httpx.AsyncClient(
             transport=httpx.MockTransport(timeout), **kw
         )),
-        TestClient(app) as api,
+        TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api,
     ):
         response = api.post("/parse", json={"text": TEXT})
     assert response.status_code == 503
@@ -164,7 +171,7 @@ def test_timeout_and_missing_key():
     with (
         patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}),
         patch("app.llm.client.AsyncClient") as external_client,
-        TestClient(app) as api,
+        TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api,
     ):
         response = api.post("/parse", json={"text": TEXT})
         external_client.assert_not_called()

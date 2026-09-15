@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.llm import client
 
 router = APIRouter()
-PROMPT = (Path(__file__).parent / "prompts" / "parse.md").read_text(encoding="utf-8")
-CLARIFYING_QUESTION = "월 데이터 사용량과 이용하고 싶은 구독 서비스를 알려주시겠어요?"
+PROMPT = (Path(__file__).parent / "prompts" / "parse.txt").read_text(encoding="utf-8")
+CLARIFYING_QUESTION = "추천에 사용할 월 데이터 용량을 1GB 이상의 정수로, 원하는 구독 서비스를 1개 이상 알려주시겠어요?"
 
 
 class ParseRequest(BaseModel):
@@ -20,8 +20,9 @@ class ParseRequest(BaseModel):
 class RequiredInputs(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    monthlyDataGb: float = Field(ge=0, allow_inf_nan=False)
-    wantedServiceIds: list[Annotated[int, Field(ge=1, le=6)]] = Field(max_length=6)
+    # BE RecommendationRequest의 Java Integer 범위. 소수나 0을 보정하지 않는다.
+    monthlyDataGb: int = Field(ge=1, le=2147483647)
+    wantedServiceIds: list[Annotated[int, Field(ge=1, le=6)]] = Field(min_length=1, max_length=6)
 
 
 class OptionalInputs(BaseModel):
