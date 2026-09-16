@@ -220,3 +220,30 @@ def test_a_model_outage_is_not_cached():
         assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == []
         assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == ["월 17,700원 덜 내세요."]
     assert stub.await_count == 2
+
+
+def test_the_exact_payload_backend_sends_is_accepted():
+    """BE `AiGateway.narrate`는 CostResult 8필드를 Jackson으로 직렬화하고 missingInputs를 얹는다.
+
+    Java long은 항상 값이 있고 null이 아니다. note·howToFind만 null일 수 있다.
+    이 모양이 깨지면 BE가 422를 Unavailable로 삼켜 빈 사유가 나가므로 화면에서 알아챌 수 없다.
+    """
+    payload = {
+        "planId": 42, "planName": "5G 슬림+", "carrier": "SKT",
+        "monthlyTotal": 71300, "baseline": 89000,
+        "monthlySavings": 17700, "annualSavings": 212400,
+        "breakdown": [{"label": "5G 슬림+ 기본료", "amount": 55000,
+                       "provenance": "OFFICIAL", "note": None}],
+        "missingInputs": [{"field": "hasFamilyBundle", "impact": "가족 결합 시 절감 가능",
+                           "howToFind": None}],
+    }
+    response = narrate(payload, reasons=["기본료가 월 55,000원이에요."])
+    assert response.status_code == 200
+    assert response.json()["reasons"] == ["기본료가 월 55,000원이에요."]
+
+
+@pytest.mark.parametrize("field", ["monthlySavings", "annualSavings"])
+def test_a_worse_combination_still_gets_an_explanation(field):
+    # 절감액이 음수여도 422가 아니다. BE는 baseline보다 비싼 조합도 설명을 요구한다.
+    request = deepcopy(BREAKDOWN) | {field: -10000}
+    assert narrate(request, reasons=[]).status_code == 200
