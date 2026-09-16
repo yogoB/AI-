@@ -1,5 +1,13 @@
 import pytest
 
+from app.narrate import REASON_CACHE
+
+
+@pytest.fixture(autouse=True)
+def clear_reason_cache():
+    # 사유 캐시는 프로세스 전역이다. 테스트끼리 결과가 새지 않게 비우고 시작한다.
+    REASON_CACHE.clear()
+
 
 @pytest.fixture(autouse=True)
 def backend_token(monkeypatch):

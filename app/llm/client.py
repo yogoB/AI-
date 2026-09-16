@@ -51,9 +51,10 @@ def _structured_result(message: dict) -> dict:
         raise InvalidLLMResponse("Invalid model response") from None
 
 
-async def complete(system_prompt: str, content: str | list[dict], schema: dict) -> dict:
+async def complete(system_prompt: str, content: str | list[dict], schema: dict,
+                   max_tokens: int = 1024) -> dict:
     message = await _messages({
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": [{"role": "user", "content": content}],
         "tools": [{"name": "return_result", "input_schema": schema}],
