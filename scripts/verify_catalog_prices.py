@@ -1,4 +1,4 @@
-"""합친 카탈로그 CSV의 가격을 공식 출처와 대조해 불일치 리포트를 만든다.
+"""승인된 카탈로그의 가격을 공식 출처와 대조해 불일치 리포트를 만든다.
 
 수동 배치다. 추천 요청 경로에서는 절대 호출하지 않는다.
 결과는 검수 대기 목록일 뿐이며, 사람이 확인하기 전에는 추천·최저가·알림 계산에 쓰지 않는다
@@ -18,6 +18,9 @@ from fastapi import HTTPException
 from app.catalog import CatalogSearchRequest, CatalogSearchResponse, find_candidate
 
 ROOT = Path(__file__).resolve().parents[2]
+# 운영 원본은 catalog-store의 승인된 리비전이다(manifest.json에 approved_by·출처·행수가 남는다).
+# sources/archive는 출처 확인용 보존본이라 읽지 않는다.
+STORE = "catalog-store"
 SEARCHES_PER_ROW = 1
 USD_PER_SEARCH = 0.01  # 웹 검색 $10 / 1,000회. 토큰과 별개로 과금된다.
 REPORT_FIELDS = [
@@ -36,38 +39,47 @@ class Target:
     csv_price: int
 
 
+def read_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def to_won(value: str) -> int | None:
     digits = "".join(character for character in (value or "") if character.isdigit())
     return int(digits) if digits else None
 
 
-def mobile_targets(rows: list[dict[str, str]], include_excluded: bool) -> list[Target]:
+def revision_dir(root: Path) -> Path:
+    """`current`가 가리키는 승인 리비전. 승인되지 않은 데이터는 검증 대상이 아니다."""
+    current = (root / STORE / "current").read_text(encoding="utf-8").strip()
+    revision = root / STORE / "revisions" / current
+    if not revision.is_dir():
+        raise FileNotFoundError(f"{STORE}/revisions/{current}")
+    return revision
+
+
+def mobile_targets(rows: list[dict[str, str]]) -> list[Target]:
     targets = []
     for row in rows:
-        if not include_excluded and row.get("추천판정") == "추천 제외":
-            continue
-        price = to_won(row.get("월정액(원)", ""))
-        name = (row.get("요금제명") or "").strip()
-        provider = (row.get("브랜드") or "").strip()
+        price = to_won(row.get("base_price", ""))
+        name = (row.get("plan_name") or "").strip()
+        provider = (row.get("carrier") or "").strip()
         if price is None or not name or not provider:
             continue
-        targets.append(Target("MOBILE_PLAN", "통신", (row.get("공식상품ID") or "").strip(),
-                              provider, name, price))
+        targets.append(Target("MOBILE_PLAN", "통신", "", provider, name, price))
     return targets
 
 
-def subscription_targets(rows: list[dict[str, str]], include_excluded: bool) -> list[Target]:
+def subscription_targets(tiers: list[dict[str, str]], services: list[dict[str, str]]) -> list[Target]:
+    names = {(row.get("id") or "").strip(): (row.get("name") or "").strip() for row in services}
     targets = []
-    for row in rows:
-        # 원화 표시가 아닌 행은 원 단위 CSV 값과 대조할 수 없다. 환산하지 않는다.
-        if row.get("currency") != "KRW":
-            continue
-        price = to_won(row.get("regular_price", ""))
-        name = (row.get("plan_name") or "").strip()
-        provider = (row.get("service") or "").strip()
+    for row in tiers:
+        price = to_won(row.get("price", ""))
+        name = (row.get("name") or "").strip()
+        provider = names.get((row.get("service_id") or "").strip(), "")
         if price is None or not name or not provider:
             continue
-        targets.append(Target("SUBSCRIPTION", row.get("구분", "구독"), (row.get("plan_id") or "").strip(),
+        targets.append(Target("SUBSCRIPTION", "구독", (row.get("id") or "").strip(),
                               provider, name, price))
     return targets
 
@@ -134,7 +146,6 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=20,
                         help="검사할 행 수. 0이면 전체 (행마다 웹 검색을 호출한다)")
     parser.add_argument("--concurrency", type=int, default=3)
-    parser.add_argument("--include-excluded", action="store_true", help="추천 제외 행도 검사")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true", help="대상만 세고 모델을 호출하지 않는다")
     parser.add_argument("--max-usd", type=float, default=5.0,
@@ -147,21 +158,24 @@ def main() -> int:
             return 1
 
     mobile = arguments.axis == "통신"
-    source = arguments.root / ("catalog_mobile_plans.csv" if mobile else "catalog_subscriptions.csv")
-    if not source.exists():
-        print(f"{source.name}이 없다. 먼저 merge_catalog_csv.py를 실행한다", file=sys.stderr)
+    try:
+        revision = revision_dir(arguments.root)
+    except (FileNotFoundError, OSError) as error:
+        print(f"승인된 카탈로그 리비전을 찾지 못했다: {error}", file=sys.stderr)
         return 1
 
-    with source.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    build = mobile_targets if mobile else subscription_targets
-    targets = build(rows, arguments.include_excluded)
+    if mobile:
+        source = revision / "mobile_plan.csv"
+        targets = mobile_targets(read_rows(source))
+    else:
+        source = revision / "subscription_tier.csv"
+        targets = subscription_targets(read_rows(source), read_rows(revision / "subscription_service.csv"))
 
     total = len(targets)
     if arguments.limit:
         targets = targets[:arguments.limit]
     searches = len(targets) * SEARCHES_PER_ROW
-    print(f"{source.name}: 대상 {total}행 중 {len(targets)}행 검사"
+    print(f"{revision.name[:12]}/{source.name}: 대상 {total}행 중 {len(targets)}행 검사"
           f"{f' (나머지 {total - len(targets)}행 건너뜀)' if total > len(targets) else ''}",
           file=sys.stderr)
     projected = searches * USD_PER_SEARCH

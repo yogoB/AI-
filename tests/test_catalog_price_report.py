@@ -1,6 +1,7 @@
 """가격 불일치 배치의 판정 규칙. 실제 모델이나 웹 검색을 호출하지 않는다."""
 
 import asyncio
+import csv
 from datetime import UTC, datetime
 
 import pytest
@@ -61,21 +62,25 @@ def test_rejected_source_is_kept_apart_from_a_price_mismatch(monkeypatch, status
     assert report["확인가격"] == "" and report["차액"] == ""
 
 
-def test_excluded_and_non_krw_rows_are_left_out():
+def test_rows_without_a_usable_price_or_name_are_left_out():
     plans = [
-        {"추천판정": "추천 가능", "브랜드": "SKT", "요금제명": "A", "월정액(원)": "55,000"},
-        {"추천판정": "추천 제외", "브랜드": "SKT", "요금제명": "B", "월정액(원)": "55000"},
-        {"추천판정": "추천 가능", "브랜드": "SKT", "요금제명": "C", "월정액(원)": ""},
+        {"carrier": "SKT", "plan_name": "A", "base_price": "55000"},
+        {"carrier": "SKT", "plan_name": "B", "base_price": ""},      # 가격 미확인
+        {"carrier": "", "plan_name": "C", "base_price": "55000"},     # 사업자 미상
     ]
-    assert [target.name for target in mobile_targets(plans, include_excluded=False)] == ["A"]
-    assert [target.name for target in mobile_targets(plans, include_excluded=True)] == ["A", "B"]
-    assert mobile_targets(plans, include_excluded=False)[0].csv_price == 55000
+    targets = mobile_targets(plans)
+    assert [target.name for target in targets] == ["A"]
+    assert targets[0].csv_price == 55000
 
-    subscriptions = [
-        {"currency": "KRW", "service": "넷플릭스", "plan_name": "스탠다드", "regular_price": "13500", "구분": "OTT"},
-        {"currency": "USD", "service": "ChatGPT", "plan_name": "Plus", "regular_price": "20", "구분": "AI"},
+
+def test_subscription_tiers_take_their_brand_from_the_service_table():
+    tiers = [
+        {"id": "1", "service_id": "1", "name": "광고형 스탠다드", "price": "7000"},
+        {"id": "2", "service_id": "9", "name": "고아 티어", "price": "9900"},   # 서비스 없음
     ]
-    assert [target.name for target in subscription_targets(subscriptions, False)] == ["스탠다드"]
+    services = [{"id": "1", "name": "넷플릭스"}]
+    targets = subscription_targets(tiers, services)
+    assert [(t.provider, t.name) for t in targets] == [("넷플릭스", "광고형 스탠다드")]
 
 
 def test_the_public_endpoint_does_not_let_callers_raise_the_search_budget():
@@ -93,12 +98,36 @@ def test_verification_spends_one_search_per_row():
     assert SEARCHES_PER_ROW == 1
 
 
-def test_a_run_over_the_spend_ceiling_refuses_to_start(monkeypatch, capsys):
-    # 검색비는 되돌릴 수 없다. 시작 전에 막는 것이 유일한 기회다.
+def write_plans(root, rows):
+    """catalog-store는 Git 밖에 있다. 테스트는 제 리비전을 만들어 쓴다."""
+    revision = root / "catalog-store" / "revisions" / "deadbeef"
+    revision.mkdir(parents=True)
+    (root / "catalog-store" / "current").write_text("deadbeef\n", encoding="utf-8")
+    with (revision / "mobile_plan.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["carrier", "plan_name", "base_price"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return revision
+
+
+def run_verify(monkeypatch, root, *argv):
     from scripts.verify_catalog_prices import main
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     monkeypatch.setenv("CATALOG_ALLOWED_DOMAINS", "tworld.co.kr")
-    monkeypatch.setattr("sys.argv", ["verify", "통신", "--limit", "1000", "--max-usd", "1"])
-    assert main() == 1
+    monkeypatch.setattr("sys.argv", ["verify", "통신", "--root", str(root), *argv])
+    return main()
+
+
+def test_a_run_over_the_spend_ceiling_refuses_to_start(monkeypatch, capsys, tmp_path):
+    # 검색비는 되돌릴 수 없다. 시작 전에 막는 것이 유일한 기회다.
+    write_plans(tmp_path, [{"carrier": "SKT", "plan_name": f"요금제{n}",
+                            "base_price": "55000"} for n in range(300)])
+    assert run_verify(monkeypatch, tmp_path, "--limit", "0", "--max-usd", "1") == 1
     assert "상한 $1.00를 넘는다" in capsys.readouterr().err
+
+
+def test_a_run_inside_the_ceiling_is_allowed(monkeypatch, capsys, tmp_path):
+    write_plans(tmp_path, [{"carrier": "SKT", "plan_name": "요금제", "base_price": "55000"}])
+    assert run_verify(monkeypatch, tmp_path, "--limit", "0", "--max-usd", "1", "--dry-run") == 0
+    assert "검색 1회 = 약 $0.01" in capsys.readouterr().err
