@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -219,3 +219,42 @@ def test_the_search_budget_stops_further_searches():
     client._searches_used = monkey
     with pytest.raises(client.LLMBudgetExceeded):
         asyncio.run(client.search("p", "q", {}, ["tworld.co.kr"], max_uses=1))
+
+
+def test_the_budget_counts_searches_actually_used_not_reserved(monkeypatch):
+    # max_uses는 상한일 뿐이다. 3회 예약하고 1회만 썼는데 3회를 빼면 예산이 3배 빨리 마른다.
+    from app.llm import client
+
+    response = {
+        "stop_reason": "tool_use",
+        "content": [
+            {"type": "web_search_tool_result",
+             "content": [{"type": "web_search_result", "url": "https://a.tworld.co.kr/p", "title": "t"}]},
+            {"type": "tool_use", "name": "return_result", "input": {"confidence": 0.9}},
+        ],
+        "usage": {"server_tool_use": {"web_search_requests": 1}},
+    }
+    with patch("app.llm.client._messages", AsyncMock(return_value=response)):
+        asyncio.run(client.search("p", "q", {}, ["tworld.co.kr"], max_uses=3))
+    assert client.searches_used() == 1
+
+
+def test_a_failed_search_is_not_charged_to_the_budget():
+    # 공식 문서: 검색 중 오류가 나면 그 검색은 과금되지 않는다.
+    from app.llm import client
+
+    with patch("app.llm.client._messages", AsyncMock(side_effect=client.LLMError("boom"))):
+        with pytest.raises(client.LLMError):
+            asyncio.run(client.search("p", "q", {}, ["tworld.co.kr"], max_uses=3))
+    assert client.searches_used() == 0
+
+
+def test_the_budget_blocks_before_any_http_call():
+    from app.llm import client
+
+    http = AsyncMock()
+    with patch("app.llm.client._messages", http):
+        client._searches_used = client.search_limit()
+        with pytest.raises(client.LLMBudgetExceeded):
+            asyncio.run(client.search("p", "q", {}, ["tworld.co.kr"], max_uses=1))
+    assert http.await_count == 0
