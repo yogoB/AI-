@@ -22,6 +22,13 @@ BREAKDOWN = {
 }
 
 
+# BREAKDOWN 으로 규칙이 만드는 사유. 모델이 없거나 죽었을 때 이 값이 나간다.
+RULE_REASONS = [
+    "“선택약정 25% 할인”으로 월 13,750원이 빠져요.",
+    "그래서 지금보다 월 17,700원 덜 내세요.",
+]
+
+
 def narrate(request, reasons=..., side_effect=None):
     """추천 사유만 모델이 만든다. 금액 문장은 고정 문구다."""
     result = {} if reasons is ... else {"reasons": reasons}
@@ -159,19 +166,21 @@ def test_annual_savings_becomes_quotable_once_the_backend_sends_it():
     assert response.json()["reasons"] == ["1년이면 212,400원을 아껴요."]
 
 
-def test_model_failure_keeps_the_amount_message():
+def test_model_failure_falls_back_to_rule_reasons():
+    # 모델 키가 없거나 모델이 죽어도 "왜 추천됐나"가 비지 않는다. 표현만 투박해진다.
     from app.llm import client
 
     response = narrate(BREAKDOWN, side_effect=client.LLMError("down"))
     assert response.status_code == 200
-    assert response.json()["reasons"] == []
+    assert response.json()["reasons"] == RULE_REASONS
     assert "71,300원" in response.json()["message"]
 
 
 def test_malformed_model_output_is_discarded():
     response = narrate(BREAKDOWN, reasons=["줄바꿈이\n들어간 사유"])
     assert response.status_code == 200
-    assert response.json()["reasons"] == []
+    assert "줄바꿈이" not in " ".join(response.json()["reasons"])
+    assert response.json()["reasons"] == RULE_REASONS
 
 
 def test_hypothetical_savings_from_missing_inputs_cannot_be_quoted():
@@ -181,7 +190,7 @@ def test_hypothetical_savings_from_missing_inputs_cannot_be_quoted():
     request["missingInputs"] = [{"field": "hasFamilyBundle",
                                  "impact": "가족 결합 시 최대 11,000원 추가 절감 가능"}]
     response = narrate(request, reasons=["가족 결합으로 월 11,000원을 더 아껴요."])
-    assert response.json()["reasons"] == []
+    assert "11,000" not in " ".join(response.json()["reasons"])
     assert "가족 결합 여부" in response.json()["message"]
 
 
@@ -217,16 +226,18 @@ def test_a_model_outage_is_not_cached():
     stub = AsyncMock(side_effect=[client.LLMError("down"), {"reasons": ["월 17,700원 덜 내세요."]}])
     with patch("app.llm.client.complete", stub), \
             TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
-        assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == []
+        # 장애 응답은 규칙 문장으로 대신하되 캐시에 남기지 않는다. 다음 요청은 다시 모델을 부른다.
+        assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == RULE_REASONS
         assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == ["월 17,700원 덜 내세요."]
     assert stub.await_count == 2
 
 
 def test_the_exact_payload_backend_sends_is_accepted():
-    """BE `AiGateway.narrate`는 CostResult 8필드를 Jackson으로 직렬화하고 missingInputs를 얹는다.
+    """BE `AiGateway.narrate`가 계약 필드만 남겨 보내는 모양(`NARRATE_FIELDS`).
 
+    `CostResult`에는 `priceCrossCheck`처럼 AI가 쓰지 않는 필드가 더 있다. BE가 떼고 보낸다 —
+    `extra=forbid`라 하나라도 새면 422가 되고, BE는 그것을 장애로 삼켜 사유가 조용히 사라진다.
     Java long은 항상 값이 있고 null이 아니다. note·howToFind만 null일 수 있다.
-    이 모양이 깨지면 BE가 422를 Unavailable로 삼켜 빈 사유가 나가므로 화면에서 알아챌 수 없다.
     """
     payload = {
         "planId": 42, "planName": "5G 슬림+", "carrier": "SKT",
@@ -247,3 +258,80 @@ def test_a_worse_combination_still_gets_an_explanation(field):
     # 절감액이 음수여도 422가 아니다. BE는 baseline보다 비싼 조합도 설명을 요구한다.
     request = deepcopy(BREAKDOWN) | {field: -10000}
     assert narrate(request, reasons=[]).status_code == 200
+
+
+def rules_only(request):
+    """모델이 없을 때 나가는 사유. 키 미설정도 LLMError 로 들어오는 같은 경로다."""
+    from app.llm import client
+
+    return narrate(request, side_effect=client.LLMError("no key")).json()["reasons"]
+
+
+def test_a_field_backend_must_strip_is_rejected_rather_than_ignored():
+    """`priceCrossCheck`는 AI가 쓰지 않는 BE 내부 필드다. 받아 넘기지 않고 거부한다.
+
+    거부가 곧 표류 감지다. BE가 계약 밖 필드를 보내기 시작하면 여기서 422가 난다.
+    """
+    request = deepcopy(BREAKDOWN) | {"priceCrossCheck": {"status": "UNVERIFIED"}}
+    with TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
+        assert api.post("/narrate", json=request).status_code == 422
+
+
+def test_an_included_subscription_is_explained_without_inventing_its_list_price():
+    # 요금제가 무료로 주는 구독은 금액이 0이다. 원래 가격은 요청에 없으므로 문장에 넣지 않는다.
+    request = deepcopy(BREAKDOWN)
+    request["breakdown"].append({"label": "넷플릭스 스탠다드", "amount": 0,
+                                 "provenance": "OFFICIAL", "note": "제휴 혜택 적용"})
+    reasons = rules_only(request)
+    assert reasons[0] == "“넷플릭스 스탠다드” 구독을 요금제가 무료로 제공해요."
+
+
+def test_a_discounted_subscription_quotes_the_amount_backend_calculated():
+    request = deepcopy(BREAKDOWN)
+    request["breakdown"].append({"label": "티빙 스탠다드", "amount": 9500,
+                                 "provenance": "OFFICIAL", "note": "제휴 혜택 적용"})
+    reasons = rules_only(request)
+    assert reasons[0] == "“티빙 스탠다드” 구독을 제휴 혜택으로 월 9,500원에 이용해요."
+
+
+def test_an_estimated_line_is_never_used_as_a_reason():
+    # 추정치는 message가 따로 안내한다. 근거로 쓰면 확정된 할인처럼 읽힌다.
+    request = deepcopy(BREAKDOWN)
+    request["breakdown"].append({"label": "가족 결합 할인", "amount": -11000,
+                                 "provenance": "ESTIMATED"})
+    reasons = rules_only(request)
+    assert all("11,000" not in reason for reason in reasons)
+    assert "가족 결합 할인" not in " ".join(reasons)
+
+
+def test_reasons_lead_with_the_cause_and_close_with_the_saving():
+    request = deepcopy(BREAKDOWN)
+    request["breakdown"].append({"label": "넷플릭스 스탠다드", "amount": 0,
+                                 "provenance": "OFFICIAL", "note": "제휴 혜택 적용"})
+    reasons = rules_only(request)
+    assert len(reasons) == 3
+    assert "구독을" in reasons[0] and "빠져요" in reasons[1]
+    assert reasons[-1] == "그래서 지금보다 월 17,700원 덜 내세요."
+
+
+def test_no_saving_means_no_saving_sentence():
+    request = deepcopy(BREAKDOWN) | {"monthlySavings": 0}
+    reasons = rules_only(request)
+    assert all("덜 내세요" not in reason for reason in reasons)
+
+
+def test_a_label_too_long_to_read_is_left_out_rather_than_cut():
+    request = deepcopy(BREAKDOWN)
+    request["breakdown"] = [{"label": "긴" * 100, "amount": -13750, "provenance": "DERIVED"}]
+    reasons = rules_only(request)
+    assert reasons == ["그래서 지금보다 월 17,700원 덜 내세요."]
+
+
+@pytest.mark.parametrize(("label", "expected"), [
+    ("선택약정 25% 할인", "으로"), ("웨이브", "로"), ("서울결합", "으로"),
+    ("가족결합", "으로"), ("Netflix", "으로"), ("우리집 결합할", "로"),
+])
+def test_the_korean_particle_follows_the_label(label, expected):
+    from app.narrate import connective
+
+    assert connective(label) == expected

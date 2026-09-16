@@ -85,6 +85,16 @@ Claude의 [도구 입력 스키마](https://platform.claude.com/docs/en/agents-a
 자유 서술인 `note`·`impact`·`howToFind`는 설명에 복사하지 않으며, 계약에 판정 정보가 없는
 미사용 혜택 제외·해지 제안도 생성하지 않는다.
 
+추천 사유 `reasons`는 두 곳에서 나온다. 모델이 있으면 모델이 문장을 고르고,
+키가 없거나 모델이 실패하면 `rule_reasons`가 같은 값으로 문장을 만든다.
+두 경로 모두 같은 금액 가드를 통과하므로 요청에 없는 금액은 어느 쪽에서도 나가지 않는다.
+따라서 **모델 없이도 "왜 추천됐나" 목록이 비지 않는다.** 규칙은 제휴 혜택 줄, 할인 줄, 절감액 순으로
+최대 3문장을 만들고, `provenance`가 `ESTIMATED`인 줄은 근거로 쓰지 않는다.
+
+BE는 `/narrate` 요청에 계약 필드만 싣는다(`AiGateway.NARRATE_FIELDS`).
+`CostResult`에는 AI가 쓰지 않는 내부 필드가 더 있고, `extra=forbid`라 하나라도 새면 422가 된다.
+BE는 그것을 장애로 삼키므로 사유가 화면에서 조용히 사라진다.
+
 `POST /ocr`는 `{"image":"이미지 파일의 base64 문자열"}`를 받아
 `monthlyDataGb`, `monthlyVoiceMin`, `monthlySmsCount`, `confidence`를 반환한다.
 PNG·JPEG·WebP·GIF 정지 이미지, 디코딩 후 5MiB 이하·한 변 8,000픽셀 이하를 지원한다.
