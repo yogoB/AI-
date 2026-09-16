@@ -176,6 +176,37 @@ OCR 평가 JSON은 다음 형태로 작성하고 `--cases evaluations/local/ocr.
 ]
 ```
 
+공식 자료에서 카탈로그 후보 행을 뽑아 검수용 CSV를 만드는 수동 배치가 있다.
+추천 요청 경로에서는 호출하지 않으며, 기준 CSV를 고치지 않는다.
+
+```bash
+uv run --env-file .env python -m scripts.extract_catalog mobile_plan \
+    --source-url https://www.example.co.kr/plans 자료.html
+uv run --env-file .env python -m scripts.extract_catalog plan_benefit \
+    --source-url https://www.example.co.kr/plans 화면.png --dry-run
+```
+
+입력은 HTML·텍스트·CSV·PDF·이미지다. HTML은 태그를 걷어낸 본문만 보내며 `<script>`·`<style>` 안의
+글자는 보내지 않는다. `--source-url`은 운영자가 확인한 공식 주소이며 모델이 만들지 않는다.
+자바스크립트로 그리는 화면은 내려받은 HTML에 값이 없으므로 PDF나 스크린샷으로 넘긴다.
+
+모델은 행마다 `sourceQuote`를 함께 반환한다. 스크립트는 그 인용이 보낸 자료 안에 실제로 있는지,
+그 행의 금액이 인용 안에 보이는지 대조하고 어긋나면 그 행을 버린다.
+단위 환산(`110GB` → `112640`), 무제한 표기(`999999`), 서비스·등급 이름 → ID 매핑은 스크립트가 한다.
+모델은 숫자를 만들지 않는다.
+
+- `mobile_plan.csv` 또는 `plan_benefit.csv`: 기계 대조를 통과한 행. 시드 CSV와 열 순서가 같다.
+- `*_manual.csv`: 이미지·PDF에서 나온 행. 대조할 글자가 없어 사람이 화면과 나란히 봐야 한다.
+- `review.csv`: 채택·검수필요·폐기 전부와 사유·인용문.
+
+가입 대상을 확인할 수 없는 요금제(`UNKNOWN`)는 버린다. 빈 `age_limit`은 누구나 가입 가능으로 읽혀
+자격이 필요한 상품이 전체 사용자에게 추천된다. 등급을 모르는 무료 제공은
+`BUNDLE_INCLUDED`(표시만)로 낮춰 금액 효과를 없앤다.
+
+`--dry-run`은 `count_tokens`로 입력 토큰을 실측하고 예상 비용만 출력한다(과금 없음).
+기본 상한은 `--max-usd 2`이며 넘으면 실행하지 않는다. 웹 검색을 쓰지 않으므로 토큰 외 비용은 없다.
+결과는 검수 대기 후보다. 승인은 BE의 카탈로그 변경 제안 절차로 한다.
+
 README 이외 Markdown(`AGENTS.md`, `docs/` 포함)은 로컬에서 관리한다.
 앱 실행에 필요한 프롬프트는 `.txt`로 저장소에 포함한다.
 `.env.*`, 키·인증서·자격 증명 파일, 업로드 이미지 폴더, 로그·DB·백업 파일은 Git에서 제외한다.

@@ -43,7 +43,8 @@ SAMPLE_NARRATE = NarrateRequest(
 )
 
 
-async def count_tokens(model: str, system: str, content: str, tools: list[dict]) -> int:
+async def count_tokens(model: str, system: str, content: str | list[dict],
+                       tools: list[dict]) -> int:
     body = {"model": model, "system": system, "tools": tools,
             "messages": [{"role": "user", "content": content}]}
     result = await client._messages(body, path="/v1/messages/count_tokens")

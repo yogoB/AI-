@@ -31,14 +31,14 @@ def default_model() -> str:
     return os.getenv("MODEL_NAME") or "claude-sonnet-5"
 
 
-async def _messages(body: dict, path: str = "/v1/messages") -> dict:
+async def _messages(body: dict, path: str = "/v1/messages", timeout: float = 20.0) -> dict:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         raise LLMError("ANTHROPIC_API_KEY is not configured")
 
     body = {"model": default_model(), **body}
     try:
-        async with AsyncClient(timeout=Timeout(20.0, connect=5.0)) as client:
+        async with AsyncClient(timeout=Timeout(timeout, connect=5.0)) as client:
             response = await client.post(
                 f"https://api.anthropic.com{path}",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
@@ -71,7 +71,11 @@ def _structured_result(message: dict) -> dict:
 
 
 async def complete(system_prompt: str, content: str | list[dict], schema: dict,
-                   max_tokens: int = 1024, model: str | None = None) -> dict:
+                   max_tokens: int = 1024, model: str | None = None,
+                   timeout: float = 20.0) -> dict:
+    """timeout은 응답 하나를 기다리는 초다. 기본값은 사용자 요청 경로 기준이고,
+    긴 자료에서 행을 여러 개 뽑는 배치는 이 값을 늘려 쓴다.
+    """
     message = await _messages({
         **({"model": model} if model else {}),
         "max_tokens": max_tokens,
@@ -79,7 +83,7 @@ async def complete(system_prompt: str, content: str | list[dict], schema: dict,
         "messages": [{"role": "user", "content": content}],
         "tools": [{"name": "return_result", "input_schema": schema}],
         "tool_choice": {"type": "tool", "name": "return_result"},
-    })
+    }, timeout=timeout)
     return _structured_result(message)
 
 
