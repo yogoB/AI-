@@ -52,10 +52,10 @@ def test_not_found_never_produces_a_price():
 
 @pytest.mark.parametrize(("status", "expected"), [(502, "출처거부"), (503, "호출실패")])
 def test_rejected_source_is_kept_apart_from_a_price_mismatch(monkeypatch, status, expected):
-    async def reject(request):
+    async def reject(request, max_uses=3):
         raise HTTPException(status_code=status, detail={"code": "AI-CATALOG-001"})
 
-    monkeypatch.setattr("scripts.verify_catalog_prices.catalog_candidate", reject)
+    monkeypatch.setattr("scripts.verify_catalog_prices.find_candidate", reject)
     report = asyncio.run(check(TARGET))
     assert report["판정"] == expected
     assert report["확인가격"] == "" and report["차액"] == ""
@@ -76,3 +76,29 @@ def test_excluded_and_non_krw_rows_are_left_out():
         {"currency": "USD", "service": "ChatGPT", "plan_name": "Plus", "regular_price": "20", "구분": "AI"},
     ]
     assert [target.name for target in subscription_targets(subscriptions, False)] == ["스탠다드"]
+
+
+def test_the_public_endpoint_does_not_let_callers_raise_the_search_budget():
+    # 검색은 1,000회당 $10다. 도메인과 같은 이유로 호출자가 횟수를 정하지 못한다.
+    import inspect
+
+    from app.catalog import catalog_candidate
+
+    assert list(inspect.signature(catalog_candidate).parameters) == ["request"]
+
+
+def test_verification_spends_one_search_per_row():
+    from scripts.verify_catalog_prices import SEARCHES_PER_ROW
+
+    assert SEARCHES_PER_ROW == 1
+
+
+def test_a_run_over_the_spend_ceiling_refuses_to_start(monkeypatch, capsys):
+    # 검색비는 되돌릴 수 없다. 시작 전에 막는 것이 유일한 기회다.
+    from scripts.verify_catalog_prices import main
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setenv("CATALOG_ALLOWED_DOMAINS", "tworld.co.kr")
+    monkeypatch.setattr("sys.argv", ["verify", "통신", "--limit", "1000", "--max-usd", "1"])
+    assert main() == 1
+    assert "상한 $1.00를 넘는다" in capsys.readouterr().err

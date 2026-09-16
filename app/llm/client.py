@@ -12,16 +12,35 @@ class InvalidLLMResponse(ValueError):
     pass
 
 
-async def _messages(body: dict) -> dict:
+class LLMBudgetExceeded(LLMError):
+    """웹 검색 예산 소진. LLMError를 상속해 기존 호출부가 그대로 503으로 흡수한다."""
+
+
+def search_limit() -> int:
+    return int(os.getenv("SEARCH_LIMIT") or 300)
+
+
+_searches_used = 0
+
+
+def searches_used() -> int:
+    return _searches_used
+
+
+def default_model() -> str:
+    return os.getenv("MODEL_NAME") or "claude-sonnet-5"
+
+
+async def _messages(body: dict, path: str = "/v1/messages") -> dict:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         raise LLMError("ANTHROPIC_API_KEY is not configured")
 
-    body = {"model": os.getenv("MODEL_NAME") or "claude-sonnet-4-6", **body}
+    body = {"model": default_model(), **body}
     try:
         async with AsyncClient(timeout=Timeout(20.0, connect=5.0)) as client:
             response = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                f"https://api.anthropic.com{path}",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
                 json=body,
             )
@@ -52,8 +71,9 @@ def _structured_result(message: dict) -> dict:
 
 
 async def complete(system_prompt: str, content: str | list[dict], schema: dict,
-                   max_tokens: int = 1024) -> dict:
+                   max_tokens: int = 1024, model: str | None = None) -> dict:
     message = await _messages({
+        **({"model": model} if model else {}),
         "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": [{"role": "user", "content": content}],
@@ -63,7 +83,21 @@ async def complete(system_prompt: str, content: str | list[dict], schema: dict,
     return _structured_result(message)
 
 
-async def search(system_prompt: str, query: str, schema: dict, allowed_domains: list[str]) -> tuple[dict, list[dict]]:
+async def search(system_prompt: str, query: str, schema: dict, allowed_domains: list[str],
+                 max_uses: int = 3) -> tuple[dict, list[dict]]:
+    """max_uses는 곧 돈이다 — 웹 검색은 1,000회당 $10로 토큰과 별개로 과금된다.
+    모르는 상품을 찾을 때는 3회가 필요하지만, 아는 상품의 가격만 확인할 때는 1회로 충분하다.
+    """
+    global _searches_used
+    # 검색은 1,000회당 $10다. 한 번 새면 크레딧이 조용히 사라지므로 호출 전에 막는다.
+    # ponytail: 프로세스 수명 기준 카운터다. 재시작하면 0으로 돌아간다.
+    #   여러 대로 늘리거나 일자별 상한이 필요해지면 공용 저장소로 옮긴다.
+    if _searches_used + max_uses > search_limit():
+        raise LLMBudgetExceeded(
+            f"Web search budget exhausted ({_searches_used}/{search_limit()})"
+        )
+    _searches_used += max_uses
+
     message = await _messages({
         "max_tokens": 2048,
         "system": system_prompt,
@@ -72,7 +106,7 @@ async def search(system_prompt: str, query: str, schema: dict, allowed_domains: 
             {
                 "type": "web_search_20250305",
                 "name": "web_search",
-                "max_uses": 3,
+                "max_uses": max_uses,
                 "allowed_domains": allowed_domains,
             },
             {

@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from app.cache import Lru
 from app.llm import client
 
 router = APIRouter()
@@ -91,14 +92,30 @@ def allowed_domains() -> list[str]:
     return list(dict.fromkeys(domains))
 
 
+def _remember(key: str, response: CatalogSearchResponse) -> CatalogSearchResponse:
+    """확정된 결과만 담는다. 오류·예산 소진은 캐시하지 않아 복구되면 바로 다시 시도한다."""
+    CANDIDATE_CACHE.put(key, response)
+    return response
+
+
 def _allowed_url(url: str, domains: list[str]) -> bool:
     parsed = urlsplit(url)
     host = (parsed.hostname or "").lower().rstrip(".")
     return parsed.scheme == "https" and any(host == domain or host.endswith(f".{domain}") for domain in domains)
 
 
-@router.post("/catalog/candidates", response_model=CatalogSearchResponse)
-async def catalog_candidate(request: CatalogSearchRequest) -> CatalogSearchResponse:
+# 검색 횟수는 곧 비용이다(1,000회당 $10). 도메인과 마찬가지로 호출자가 정하지 못하게 서버가 고정한다.
+SEARCH_MAX_USES = 3
+# 같은 상품을 여러 사용자가 물으면 검색이 그만큼 반복된다. CSV에 편입되기 전까지의 공백을 캐시가 메운다.
+# checkedAt은 실제로 확인한 시각 그대로 남는다 — 재사용한다고 새로 찍지 않는다.
+CANDIDATE_CACHE = Lru(limit=512)
+
+
+async def find_candidate(request: CatalogSearchRequest, max_uses: int = SEARCH_MAX_USES) -> CatalogSearchResponse:
+    """배치 도구가 검색 횟수를 줄여 쓰는 내부 진입점. 공개 엔드포인트는 항상 기본값을 쓴다."""
+    key = request.model_dump_json()
+    if (cached := CANDIDATE_CACHE.get(key)) is not None:
+        return cached
     try:
         domains = allowed_domains()
     except ValueError:
@@ -107,7 +124,7 @@ async def catalog_candidate(request: CatalogSearchRequest) -> CatalogSearchRespo
     query = f"상품 종류: {request.productType}\n찾을 상품: {request.query}"
     try:
         raw, raw_sources = await client.search(
-            PROMPT, query, CatalogModelResult.model_json_schema(), domains
+            PROMPT, query, CatalogModelResult.model_json_schema(), domains, max_uses
         )
         result = CatalogModelResult.model_validate(raw)
         sources = [CatalogSource.model_validate(source) for source in raw_sources]
@@ -121,15 +138,15 @@ async def catalog_candidate(request: CatalogSearchRequest) -> CatalogSearchRespo
 
     checked_at = datetime.now(UTC)
     if result.confidence < 0.7:
-        return CatalogSearchResponse(
+        return _remember(key, CatalogSearchResponse(
             status="NEEDS_INPUT", candidate=None, confidence=result.confidence,
             sources=sources, checkedAt=checked_at, clarifyingQuestion=CLARIFYING_QUESTION,
-        )
+        ))
     if result.candidate is None:
-        return CatalogSearchResponse(
+        return _remember(key, CatalogSearchResponse(
             status="NOT_FOUND", candidate=None, confidence=result.confidence,
             sources=sources, checkedAt=checked_at,
-        )
+        ))
 
     source_urls = {source.url for source in sources}
     candidate = result.candidate
@@ -139,7 +156,12 @@ async def catalog_candidate(request: CatalogSearchRequest) -> CatalogSearchRespo
         or not _allowed_url(candidate.sourceUrl, domains)
     ):
         raise HTTPException(status_code=502, detail={"code": "AI-CATALOG-001"})
-    return CatalogSearchResponse(
+    return _remember(key, CatalogSearchResponse(
         status="CANDIDATE_FOUND", candidate=candidate, confidence=result.confidence,
         sources=sources, checkedAt=checked_at,
-    )
+    ))
+
+
+@router.post("/catalog/candidates", response_model=CatalogSearchResponse)
+async def catalog_candidate(request: CatalogSearchRequest) -> CatalogSearchResponse:
+    return await find_candidate(request)

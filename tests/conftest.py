@@ -1,12 +1,16 @@
 import pytest
 
+from app.catalog import CANDIDATE_CACHE
+from app.llm import client
 from app.narrate import REASON_CACHE
 
 
 @pytest.fixture(autouse=True)
-def clear_reason_cache():
-    # 사유 캐시는 프로세스 전역이다. 테스트끼리 결과가 새지 않게 비우고 시작한다.
+def clear_process_state():
+    # 캐시와 검색 카운터는 프로세스 전역이다. 테스트끼리 새지 않게 비우고 시작한다.
     REASON_CACHE.clear()
+    CANDIDATE_CACHE.clear()
+    client._searches_used = 0
 
 
 @pytest.fixture(autouse=True)

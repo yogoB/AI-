@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from unittest.mock import patch
@@ -189,3 +190,32 @@ def test_invalid_catalog_request_never_calls_model(body):
         response = api.post("/catalog/candidates", json=body)
         search.assert_not_called()
     assert response.status_code == 422
+
+
+def test_the_same_product_is_searched_only_once(monkeypatch):
+    monkeypatch.setenv("CATALOG_ALLOWED_DOMAINS", "tworld.co.kr")
+    # 같은 상품을 여러 사용자가 물어도 검색은 한 번이다. 검색은 1,000회당 $10다.
+    from unittest.mock import AsyncMock
+
+    from app.catalog import CatalogSearchRequest, find_candidate
+
+    stub = AsyncMock(return_value=(
+        {"candidate": None, "confidence": 0.9},
+        [{"url": "https://www.tworld.co.kr/p", "title": "요금제", "pageAge": None}],
+    ))
+    with patch("app.llm.client.search", stub):
+        request = CatalogSearchRequest(query="SKT 베스트 Max", productType="MOBILE_PLAN")
+        first = asyncio.run(find_candidate(request))
+        second = asyncio.run(find_candidate(request))
+    assert first.status == second.status == "NOT_FOUND"
+    assert first.checkedAt == second.checkedAt      # 재사용해도 확인 시각을 새로 찍지 않는다
+    assert stub.await_count == 1
+
+
+def test_the_search_budget_stops_further_searches():
+    from app.llm import client
+
+    monkey = client.search_limit()
+    client._searches_used = monkey
+    with pytest.raises(client.LLMBudgetExceeded):
+        asyncio.run(client.search("p", "q", {}, ["tworld.co.kr"], max_uses=1))

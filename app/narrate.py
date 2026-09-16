@@ -1,11 +1,11 @@
 import re
-from collections import OrderedDict
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.cache import Lru
 from app.llm import client
 
 router = APIRouter()
@@ -15,8 +15,7 @@ NUMBER = re.compile(r"\d[\d,]*")
 # "1년", "25%", "3위" 같은 일반 수는 금액이 아니므로 통과시킨다.
 # ponytail: 금액 아닌 허위 서술은 프롬프트로 막는다. 사실 검증이 필요해지면 그때 규칙을 늘린다.
 AMOUNT = re.compile(r"\d[\d,]*(?=\s*원)|\d{1,3}(?:,\d{3})+|\d{4,}")
-REASON_CACHE: OrderedDict[str, list[str]] = OrderedDict()
-CACHE_LIMIT = 256
+REASON_CACHE = Lru(limit=256)
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
 FIELD_LABELS = {
@@ -106,7 +105,6 @@ async def curate_reasons(request: "NarrateRequest") -> list[str]:
     """
     key = request.model_dump_json()
     if (cached := REASON_CACHE.get(key)) is not None:
-        REASON_CACHE.move_to_end(key)
         return cached
     try:
         raw = await client.complete(PROMPT, key, ReasonResult.model_json_schema(), max_tokens=512)
@@ -117,9 +115,7 @@ async def curate_reasons(request: "NarrateRequest") -> list[str]:
         return []
     known = known_numbers(request)
     curated = [reason for reason in reasons if quotes_known_amounts_only(reason, known)]
-    REASON_CACHE[key] = curated
-    while len(REASON_CACHE) > CACHE_LIMIT:
-        REASON_CACHE.popitem(last=False)
+    REASON_CACHE.put(key, curated)
     return curated
 
 

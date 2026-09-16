@@ -15,9 +15,11 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.catalog import CatalogSearchRequest, CatalogSearchResponse, catalog_candidate
+from app.catalog import CatalogSearchRequest, CatalogSearchResponse, find_candidate
 
 ROOT = Path(__file__).resolve().parents[2]
+SEARCHES_PER_ROW = 1
+USD_PER_SEARCH = 0.01  # 웹 검색 $10 / 1,000회. 토큰과 별개로 과금된다.
 REPORT_FIELDS = [
     "구분", "상품ID", "사업자", "상품명", "CSV가격", "확인가격", "차액",
     "판정", "confidence", "출처URL", "확인시각", "비고",
@@ -95,7 +97,8 @@ async def check(target: Target) -> dict[str, str]:
         query=f"{target.provider} {target.name}", productType=target.product_type
     )
     try:
-        return judge(target, await catalog_candidate(request))
+        # 검증은 이미 상품명을 안다. 가격 한 줄만 확인하면 되므로 검색 1회면 된다.
+        return judge(target, await find_candidate(request, max_uses=SEARCHES_PER_ROW))
     except HTTPException as error:
         code = (error.detail or {}).get("code", "") if isinstance(error.detail, dict) else ""
         # 502는 출처가 허용 도메인·실제 검색 결과에 없다는 뜻이다. 가격 불일치와 구분해 남긴다.
@@ -134,6 +137,8 @@ def main() -> int:
     parser.add_argument("--include-excluded", action="store_true", help="추천 제외 행도 검사")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true", help="대상만 세고 모델을 호출하지 않는다")
+    parser.add_argument("--max-usd", type=float, default=5.0,
+                        help="예상 검색비 상한. 넘으면 실행하지 않는다 (0이면 상한 없음)")
     arguments = parser.parse_args()
 
     for variable in () if arguments.dry_run else ("ANTHROPIC_API_KEY", "CATALOG_ALLOWED_DOMAINS"):
@@ -155,9 +160,17 @@ def main() -> int:
     total = len(targets)
     if arguments.limit:
         targets = targets[:arguments.limit]
+    searches = len(targets) * SEARCHES_PER_ROW
     print(f"{source.name}: 대상 {total}행 중 {len(targets)}행 검사"
           f"{f' (나머지 {total - len(targets)}행 건너뜀)' if total > len(targets) else ''}",
           file=sys.stderr)
+    projected = searches * USD_PER_SEARCH
+    print(f"검색 {searches}회 = 약 ${projected:.2f} (토큰 비용 별도)", file=sys.stderr)
+    if arguments.max_usd and projected > arguments.max_usd:
+        # 검색비는 토큰과 별개로 나가고 되돌릴 수 없다. 시작 전에 막는다.
+        print(f"예상 검색비가 상한 ${arguments.max_usd:.2f}를 넘는다. "
+              f"--limit을 줄이거나 --max-usd를 올려라", file=sys.stderr)
+        return 1
 
     if arguments.dry_run:
         for target in targets[:5]:
