@@ -7,24 +7,28 @@ from fastapi import HTTPException
 from PIL import Image
 import pytest
 
-from app.parse import ParseResponse
+from app.ocr import OcrResponse
 from scripts.evaluate_model import evaluate, main
 
 
-def test_evaluation_detects_mismatch_without_printing_user_data(capsys):
-    cases = [{"id": "sample", "kind": "parse", "text": "private user message",
-              "expected": {"required": {"monthlyDataGb": 20, "wantedServiceIds": [1]}}}]
-    result = ParseResponse.model_validate({"confidence": 0.9, "required": cases[0]["expected"]["required"]})
-    with patch("scripts.evaluate_model.parse", return_value=result):
-        assert asyncio.run(evaluate(cases, Path("."))) == 0
-        cases[0]["expected"] = {"required": None}
-        assert asyncio.run(evaluate(cases, Path("."))) == 1
-    with patch("scripts.evaluate_model.parse", side_effect=HTTPException(status_code=503)) as parse:
-        assert asyncio.run(evaluate(cases * 2, Path("."))) == 2
-        parse.assert_called_once()
+def test_evaluation_detects_mismatch_without_printing_user_data(tmp_path, capsys):
+    image = tmp_path / "private-screen.png"
+    with Image.new("RGB", (2, 2), "white") as source:
+        source.save(image)
+    cases = [{"id": "sample", "kind": "ocr", "image": image.name,
+              "expected": {"monthlyDataGb": 20.0}}]
+    result = OcrResponse.model_validate({"confidence": 0.9, "monthlyDataGb": 20.0})
+    with patch("scripts.evaluate_model.ocr", return_value=result):
+        assert asyncio.run(evaluate(cases, tmp_path)) == 0
+        cases[0]["expected"] = {"monthlyDataGb": 7.5}
+        assert asyncio.run(evaluate(cases, tmp_path)) == 1
+    # 첫 오류에서 멈춘다 — 실패가 이어질 때 남은 사례로 모델을 더 부르지 않는다.
+    with patch("scripts.evaluate_model.ocr", side_effect=HTTPException(status_code=503)) as ocr_call:
+        assert asyncio.run(evaluate(cases * 2, tmp_path)) == 2
+        ocr_call.assert_called_once()
     output = capsys.readouterr().out
     assert "PASS sample" in output and "FAIL sample" in output
-    assert "private user message" not in output
+    assert image.name not in output
 
 
 @pytest.mark.parametrize("image_state", ["missing", "corrupt", "oversize"])
@@ -54,11 +58,14 @@ def test_dry_run_rejects_invalid_ocr_image_without_model_call(tmp_path, capsys, 
 @pytest.mark.parametrize("invalid", [
     {"id": "valid"},
     {"expected": {"unknownField": 20}},
-    {"expected": {"required": {"monthlyDataGb": True, "wantedServiceIds": [1]}}},
+    {"expected": {"monthlyDataGb": True}},
 ])
 def test_all_cases_are_validated_before_first_model_call(tmp_path, capsys, invalid):
-    valid = {"id": "valid", "kind": "parse", "text": "private user message",
-             "expected": {"required": None}}
+    image = tmp_path / "private-screen.png"
+    with Image.new("RGB", (2, 2), "white") as source:
+        source.save(image)
+    valid = {"id": "valid", "kind": "ocr", "image": image.name,
+             "expected": {"monthlyDataGb": 18.4}}
     cases = tmp_path / "cases.json"
     cases.write_text(json.dumps([valid, {**valid, "id": "invalid", **invalid}]))
     with (
@@ -70,7 +77,7 @@ def test_all_cases_are_validated_before_first_model_call(tmp_path, capsys, inval
             main()
         assert error.value.code == 2
         complete.assert_not_called()
-    assert valid["text"] not in capsys.readouterr().err
+    assert valid["image"] not in capsys.readouterr().err
 
 
 def test_ocr_evaluation_reads_image_preserves_null_and_zero_and_detects_errors(tmp_path, capsys):

@@ -8,7 +8,6 @@
 ```
 사용자 발화
   → [BE_main] POST /api/v1/chat/messages
-  → [AI] POST /parse            자연어 → 파라미터
   → [BE_main] 내부 recommend 호출 (필터 경로와 동일 로직)
   → [AI] POST /narrate          결과 → 한국어 설명
   → 사용자
@@ -18,13 +17,13 @@
 프론트는 BE_main API만 호출하며 AI 서버에 직접 요청하지 않는다.
 BE 원본 §2에 맞춰 두 서버가 비밀 환경 변수 `AI_INTERNAL_TOKEN`을 공유한다.
 BE가 `Authorization: Bearer <AI_INTERNAL_TOKEN>`을 생성하며 프론트의 사용자 인증 헤더는 전달하지 않는다.
-`/parse`·`/narrate`·`/ocr`·`/catalog/candidates`는 토큰 누락·불일치 시 401, 서버 토큰 미설정·잘못된 설정 시 503
+`/narrate`·`/ocr`·`/catalog/candidates`는 토큰 누락·불일치 시 401, 서버 토큰 미설정·잘못된 설정 시 503
 (`detail.code: AI-AUTH-001`)으로 차단하고 모델을 호출하지 않는다. `/health`는 토큰 없이 사용한다.
 프론트 참고 명세는 BE의 `docs/BE_API.md`에서 관리한다. AI의 실제 네트워크 접근 제한은 배포 시 적용한다.
 
 ## 회원 인증 경계 (2026-09-10, BE 원본 §3 반영)
 
-비회원 추천·계산기·카탈로그·단일 발화 챗봇은 계속 공개한다. 회원의 개인 데이터는 BE 내부 userId로 관리한다.
+비회원 추천·계산기·카탈로그는 계속 공개한다. 회원의 개인 데이터는 BE 내부 userId로 관리한다.
 BE는 자체 가입·로그인과 Google OIDC를 제공하고 `/api/v1/me`에서 현재 회원만 조회한다.
 회원 인증은 15분 HttpOnly JWT 쿠키 + 브라우저 확인 쿠키 + DB 발급 지문이며 회원 변경 요청은 CSRF가 필요하다.
 자체 가입은 이메일 검증 토큰이 필요하고 비밀번호 재설정·로그인 세션 조회/폐기가 추가됐다. 가입 메일 요청만으로 계정은 생성되지 않으며 재설정은 CSRF 필수·자동 로그인 없음이다.
@@ -47,45 +46,6 @@ AI 모델·API 요청/응답에는 회원 인증 필드를 추가하지 않는�
 회원 FK·이메일·인증 정보는 복사하지 않고 기록별 법적 근거·기산일·확정 만료일을 요구한다.
 자동 5년 보존이나 완전한 익명화를 뜻하지 않는다. 일반 회원 API 및 AI는 사본을 조회/설정하지 않는다.
 상세 보유·파기 범위는 BE `docs/privacy.md`를 따른다. AI 런타임·요청/응답 필드는 변경되지 않는다.
-
-## 2. POST /parse
-
-요청
-```json
-{ "text": "데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요" }
-```
-
-응답
-```json
-{
-  "required": { "monthlyDataGb": 20, "wantedServiceIds": [1] },
-  "optional": { "currentCarrier": "SKT", "networkType": "5G",
-                "contractType": null, "hasFamilyBundle": null },
-  "confidence": 0.92,
-  "clarifyingQuestion": null
-}
-```
-
-- `confidence < 0.7` 이면 `clarifyingQuestion`을 채우고 나머지는 `null`로 둔다.
-- 추출 못 한 optional 필드는 **`null`로 둔다.** 기본값을 지어내지 않는다.
-- 현재 BE 구현(`RecommendationRequest.Required`, `RecommendationService.recommend`)에 맞춰
-  `monthlyDataGb`는 1~2147483647의 정수, `wantedServiceIds`는 최소 1개로 검증한다.
-- BE 의 `Optional` 에는 `familyLineCount`·`familyBundleDiscountKrw` 두 필드가 더 있다(2026-09-17).
-  **`/parse` 는 이 둘도 만들지 않는다** — 자연어에서 "가족결합 할인 얼마" 를 뽑지 않는다. 화면 입력 전용이다.
-  `familyBundleDiscountKrw` 는 사용자가 적어 준 금액이라 `USER_PROVIDED` 이고, 선택약정 25% 뒤에 정액으로 빠진다.
-- BE 의 `Required` 에는 `wantedTierIds`(선택)가 하나 더 있지만 **`/parse` 는 그것을 만들지 않는다.**
-  자연어는 "넷플릭스" 까지지 "넷플릭스 프리미엄" 을 가리지 않기 때문이다. BE 가 `null` 로 채워 보내고
-  서버가 대표 등급(스탠다드 우선)을 고른다. 이 응답 스키마는 그대로다 — 필드를 추가하지 않는다.
-- 소수 사용량·0·명시적인 구독 없음은 임의 보정 없이 추천용 조건을 되묻는다.
-  높은 confidence로 범위 밖 값이 오면 HTTP 502, `detail.code: AI-PARSE-001`과 고정 확인 질문을 반환한다.
-- 확인 질문: "추천에 사용할 월 데이터 용량을 1GB 이상의 정수로, 원하는 구독 서비스를 1개 이상 알려주시겠어요?"
-- `wantedServiceIds`는 아래 고정 ID를 쓴다.
-
-| ID | 서비스 | ID | 서비스 |
-|---|---|---|---|
-| 1 | 넷플릭스 | 4 | 웨이브 |
-| 2 | 디즈니+ | 5 | 왓챠 |
-| 3 | 티빙 | 6 | 유튜브 프리미엄 |
 
 ## 3. POST /narrate
 
@@ -240,8 +200,7 @@ BE는 그것을 "확인된 금액"으로 취급한다.
 
 - BE `RecommendationRequest.Required.monthlyDataGb`는 `Integer`이며 추천 서비스는 양수만 허용한다.
 - BE 추천 서비스는 `wantedServiceIds`가 비어 있으면 거절한다.
-- `/parse`는 위 BE 범위에 맞췄다. 소수·0·구독 없음의 추천 자체를 지원하려면 BE 계약 변경이 먼저다.
-- 테스트용 실제 BE와 `/parse` 결과 전달 → 추천 → `/narrate` 금액 보존을 검증했다.
+- 테스트용 실제 BE로 추천 → `/narrate` 금액 보존을 검증했다.
   AI는 TestClient, 모델만 고정 응답이며 BE·PostgreSQL은 실제 프로세스다.
 - 2026-09-09: BE 단일 발화 게이트웨이의 실제 HTTP 왕복·되묻기·필터 폴백 검증 완료(모델만 스텁).
   현재 응답 형태와 한 발화 처리 범위는 양쪽 README에 기록했다. 사용자별 이력 저장·조건 병합은 미연결이다.

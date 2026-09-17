@@ -15,8 +15,6 @@ from app.catalog import CatalogModelResult
 from app.llm import client
 from app.narrate import PROMPT as NARRATE_PROMPT
 from app.narrate import NarrateRequest, ReasonResult
-from app.parse import PROMPT as PARSE_PROMPT
-from app.parse import ParseResponse
 
 PROMPTS = Path(__file__).resolve().parents[1] / "app" / "prompts"
 USD_PER_SEARCH = 0.01  # 웹 검색 $10 / 1,000회. 토큰과 별개다.
@@ -61,8 +59,6 @@ async def report(model: str) -> None:
     routes = [
         ("/narrate 사유", NARRATE_PROMPT, SAMPLE_NARRATE.model_dump_json(),
          [tool(ReasonResult.model_json_schema())], 200, 0),
-        ("/parse", PARSE_PROMPT, "데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요",
-         [tool(ParseResponse.model_json_schema())], 300, 0),
         ("/catalog 후보 1건", (PROMPTS / "catalog.txt").read_text(encoding="utf-8"),
          "상품 종류: MOBILE_PLAN\n찾을 상품: SKT 베스트 Max",
          [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1,

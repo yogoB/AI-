@@ -1,10 +1,10 @@
 # 요고비 AI 서버
 
-Python 3.12 · FastAPI. 자연어 파싱과 결과 설명 담당.
+Python 3.12 · FastAPI. 결과 설명과 카탈로그 후보 수집 담당.
 **금액 계산은 하지 않는다** — 메인 백엔드(github.com/yogoB/BE_main)가 전담한다.
-사용자 → BE_main → `/parse` → 백엔드 계산·추천 → `/narrate` → BE_main → 사용자 순서다.
+사용자 → BE_main → 백엔드 계산·추천 → `/narrate` → BE_main → 사용자 순서다.
 대화 이력은 백엔드가 관리하며 AI 서버는 세션을 저장하지 않는다.
-프론트는 BE_main API만 호출한다. `/parse`, `/narrate`, `/ocr`는 백엔드 전용이며,
+프론트는 BE_main API만 호출한다. `/narrate`, `/ocr`는 백엔드 전용이며,
 프론트에는 AI 주소·내부 토큰·모델 API 키를 전달하지 않는다.
 프론트 연동 명세는 `BE_main/docs/BE_API.md`, 서버 간 명세는 이 README와 로컬 `docs/contract.md`에서 관리한다.
 
@@ -22,7 +22,7 @@ AI와 BE_main의 환경 변수 `AI_INTERNAL_TOKEN`에 **동일한 임의 토큰*
 백엔드는 매 요청에 `Authorization: Bearer <AI_INTERNAL_TOKEN>`을 붙인다.
 사용자 로그인 토큰과 별개이며 프론트의 Authorization 헤더를 AI로 전달하지 않는다.
 
-- `/parse`·`/narrate`·`/ocr`·`/catalog/candidates`: 내부 토큰 누락·불일치는 401 (`AI-AUTH-001`), 모델 호출 없음.
+- `/narrate`·`/ocr`·`/catalog/candidates`: 내부 토큰 누락·불일치는 401 (`AI-AUTH-001`), 모델 호출 없음.
 - 서버의 토큰 설정이 비어 있거나 잘못됐으면 503 (`AI-AUTH-001`)로 차단한다.
 - `/health`는 토큰 없이 사용 가능하다. `/docs`의 Authorize에는 내부 토큰만 입력한다.
 
@@ -58,9 +58,8 @@ unset TOKEN
 결정론적 경로로 나온다(절대 원칙 5). 모델 키는 운영자 경로(`/catalog/candidates`·추출 배치)에만 필요하다.
 자세한 배포 순서와 확인 방법은 `BE_main/docs/deploy.md` §3-2에 있다.
 
-`POST /parse`는 `{"text":"데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요"}`를 받는다.
-`text`는 공백을 제외한 내용이 있어야 하며 최대 4,000자다.
-실제 파싱은 `.env.example`을 참고해 `.env`에 `ANTHROPIC_API_KEY`를 설정한 뒤 실행한다.
+실제 모델 호출이 필요한 경로(`/ocr`·`/catalog/candidates`·추출 배치)는
+`.env.example`을 참고해 `.env`에 `ANTHROPIC_API_KEY`를 설정한 뒤 실행한다.
 
 ```bash
 uv run --env-file .env fastapi dev app/main.py
@@ -68,48 +67,12 @@ uv run --env-file .env fastapi dev app/main.py
 
 Claude의 [도구 입력 스키마](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)로
 구조화된 응답을 받고 Pydantic으로 검증한다. 모델 호출은 `app/llm/client.py`를 거치며
-프롬프트는 `app/prompts/parse.txt`에 있다. 테스트는 모델 응답을 스텁하며 실제 API를 호출하지 않는다.
-
-- `confidence < 0.7`: HTTP 200, `required`·`optional`은 `null`, 서버의 고정 확인 질문을 반환한다.
-- 추출하지 못한 선택 항목은 `null`이며 임의 기본값을 채우지 않는다.
-- 추천 입력은 현재 BE 기준으로 `monthlyDataGb`가 1~2,147,483,647의 정수이고 `wantedServiceIds`가 1개 이상이어야 한다.
-  소수 사용량·0·구독 없음은 값을 보정하지 않고 추천에 사용할 조건을 되묻는다.
-  모델이 이런 값을 높은 confidence로 반환하더라도 검증에서 차단하고 HTTP 502 (`AI-PARSE-001`)로 확인 질문을 반환한다.
-- 잘못된 요청은 HTTP 422, 키 누락·모델 호출 실패는 HTTP 503 (`detail.code: AI-LLM-001`).
-- 잘못되거나 잘린 모델 응답은 HTTP 502 (`detail.code: AI-PARSE-001`, `detail.clarifyingQuestion` 포함).
-
-계약에는 오류 코드만 정의되어 있어 HTTP 상태와 `detail` 외피는 현재 구현 기준이다.
-백엔드 연동 시 이 오류 형식의 수신 처리를 확인한다.
-
-구독 서비스 ID: 1 넷플릭스, 2 디즈니+, 3 티빙, 4 웨이브, 5 왓챠, 6 유튜브 프리미엄.
-
-`POST /narrate`는 백엔드의 계산 결과를 다음 형태로 받는다.
-
-```json
-{
-  "planId": 42,
-  "monthlyTotal": 71300, "baseline": 89000, "monthlySavings": 17700,
-  "annualSavings": 212400,
-  "planName": "5G 슬림+", "carrier": "SKT",
-  "breakdown": [{"label": "기본료", "amount": 55000, "provenance": "OFFICIAL"}],
-  "missingInputs": [{"field": "hasFamilyBundle", "impact": "가족 결합 여부 확인 필요",
-                     "howToFind": "통신사 마이페이지 > 결합 상품"}]
-}
-```
-
-`monthlyTotal`, `baseline`, `monthlySavings`, `planName`, `carrier`, `breakdown`이 필수이며
-`missingInputs`, `planId`, `annualSavings`, `candidateCount`, `howToFind`는 생략할 수 있다.
-BE는 `message`와 `reasons`를 `/recommendations` 응답에 그대로 실어 결과 화면이 렌더링한다.
-백엔드의 `CostResult`에 상위 응답의 `missingInputs`를 합쳐 전달한다.
-추천 응답의 `data.results`에서는 백엔드가 설명할 결과를 정하고, 계산기 응답에서는 `data.result`를 사용한다.
-`data`, `warnings`, `accuracy` 외피나 결과 목록 전체를 `/narrate`로 보내지 않는다.
-금액은 정수 원 단위로 검증하고, 천 단위 쉼표만 붙여 표시한다.
-합계와 절약액이 다른 항목과 맞는지 다시 계산하지 않는다.
+프롬프트는 `app/prompts/` 아래 있다. 테스트는 모델 응답을 스텁하며 실제 API를 호출하지 않는다.
 
 설명은 `app/narrate.py`의 고정 문구로 만들며 모델 API 키나 모델 호출이 필요 없다. 서버 간 내부 토큰은 필요하다.
 기본 3문장에 `ESTIMATED` 항목의 이름·금액과 "추정치예요" 안내를 덧붙이고,
 `missingInputs`가 있으면 필요한 정보를 마지막 문장으로 안내해 총 3~5문장으로 반환한다.
-추가 입력 안내는 `/parse`의 6개 입력 필드를 지원한다. 잘못된 요청은 HTTP 422로 응답한다.
+추가 입력 안내는 BE `missingInputs`의 입력 필드를 지원한다. 잘못된 요청은 HTTP 422로 응답한다.
 `planId`·`annualSavings`는 연동용으로 수용하며 설명에 사용하지 않는다.
 자유 서술인 `note`·`impact`·`howToFind`는 설명에 복사하지 않으며, 계약에 판정 정보가 없는
 미사용 혜택 제외·해지 제안도 생성하지 않는다.
@@ -169,12 +132,8 @@ OCR 업로드·확인 화면의 백엔드 연결은 아직 구현하지 않았�
 3. 사용자가 **19GB·넷플릭스**를 선택했다면 기존 `POST /api/v1/recommendations`에 아래 요청을 보낸다.
    음성·문자 사용량은 현재 추천 요청에 포함하지 않는다.
 
-```json
-{"required":{"monthlyDataGb":19,"wantedServiceIds":[1]}}
-```
-
-`tests/test_backend_integration.py`는 `/parse`의 결과를 실제 BE 추천 API에 보내고,
-반환된 각 결과를 `/narrate`에 전달해 금액이 그대로 표시되는지 검증한다.
+`tests/test_backend_integration.py`는 실제 BE 추천 API의 각 결과를 `/narrate`에 전달해
+금액이 그대로 표시되는지 검증한다.
 첫 번째 테스트는 AI 엔드포인트를 TestClient로 실행하고 모델 응답만 고정한다.
 20GB 이상 요금제와 넷플릭스 시드가 있는 테스트용 BE를 별도로 실행한 뒤 다음과 같이 실행한다.
 BE의 `dev` 프로파일 더미 시드를 사용할 수 있다.
@@ -183,7 +142,7 @@ BE의 `dev` 프로파일 더미 시드를 사용할 수 있다.
 YOGOBI_TEST_BACKEND_URL=http://127.0.0.1:18080 uv run pytest -q tests/test_backend_integration.py
 ```
 
-테스트 BE의 `AI_SERVER_URL=http://127.0.0.1:18000`을 설정하면 같은 파일에서 챗봇 게이트웨이의
+테스트 BE의 `AI_SERVER_URL=http://127.0.0.1:18000`을 설정하면 같은 파일에서 게이트웨이의
 실제 HTTP 왕복도 검증한다. 테스트가 18000 포트에 AI 서버를 띄우고 모델 응답만 스텁한다.
 테스트 BE에는 `AI_INTERNAL_TOKEN=test-backend-only-token`을 설정한다. 이 값은 테스트 전용이며 운영에 사용하지 않는다.
 테스트는 AI 직접 호출 차단, 두 서버의 토큰 불일치 폴백, 프론트 토큰을 AI에 전달하지 않는 경로도 확인한다.
@@ -205,7 +164,7 @@ uv run python -m scripts.evaluate_model --dry-run
 uv run --env-file .env python -m scripts.evaluate_model
 ```
 
-케이스는 `evaluations/parse.json`에 있다. 실행 결과에는 케이스 ID와 통과 여부만 표시하며,
+케이스는 `evaluations/`의 OCR 평가 자료를 쓴다. 실행 결과에는 케이스 ID와 통과 여부만 표시하며,
 키 미설정 시 호출하지 않고 종료한다. 호출 장애(503) 시 나머지 평가를 중단한다.
 실행 전에 전체 케이스의 필드·기대값 타입·중복 ID와 이미지의 존재·형식·크기를 검증한다.
 잘못된 자료가 하나라도 있으면 모델 호출 없이 종료한다. `--dry-run`은 이 검증만 수행한다.

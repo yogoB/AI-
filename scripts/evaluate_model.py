@@ -10,7 +10,6 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.ocr import MAX_IMAGE_BYTES, OcrRequest, OcrResponse, image_content, ocr
-from app.parse import ParseRequest, ParseResponse, parse
 
 
 def read_image(image: Path) -> str:
@@ -31,30 +30,25 @@ def validate_cases(cases: list[dict], directory: Path) -> None:
             raise ValueError("Expected a unique printable case ID")
         seen.add(label)
         kind = case.get("kind")
-        if kind not in ("parse", "ocr"):
+        if kind != "ocr":
             raise ValueError("Unknown case kind")
-        input_field = "text" if kind == "parse" else "image"
+        input_field = "image"
         if set(case) != {"id", "kind", input_field, "expected"}:
             raise ValueError("Unexpected case fields")
         expected = case["expected"]
-        response_model = ParseResponse if kind == "parse" else OcrResponse
+        response_model = OcrResponse
         if not isinstance(expected, dict) or not expected:
             raise ValueError("Expected output fields are required")
         # 기대값의 타입·필드만 검증한다. 평가에는 사용자가 적은 원래 기대값을 쓴다.
         response_model.model_validate({"confidence": 0.0, **expected})
-        if kind == "parse":
-            ParseRequest.model_validate({"text": case["text"]})
-        else:
-            image_content(read_image(directory / case["image"]))
+        image_content(read_image(directory / case["image"]))
 
 
 async def evaluate(cases: list[dict], directory: Path) -> int:
     failures = 0
     for case in cases:
         try:
-            if case["kind"] == "parse":
-                result = await parse(ParseRequest(text=case["text"]))
-            elif case["kind"] == "ocr":
+            if case["kind"] == "ocr":
                 encoded = read_image(directory / case["image"])
                 result = await ocr(OcrRequest(image=encoded))
             else:
@@ -79,7 +73,7 @@ async def evaluate(cases: list[dict], directory: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path,
-                        default=Path(__file__).resolve().parents[1] / "evaluations/parse.json")
+                        default=Path(__file__).resolve().parents[1] / "evaluations/ocr.json")
     parser.add_argument("--dry-run", action="store_true", help="모델 호출 없이 평가 자료와 이미지 검증")
     args = parser.parse_args()
     try:

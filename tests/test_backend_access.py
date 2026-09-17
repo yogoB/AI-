@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-@pytest.mark.parametrize("path", ["/parse", "/narrate", "/ocr", "/catalog/candidates"])
+@pytest.mark.parametrize("path", ["/narrate", "/ocr", "/catalog/candidates"])
 def test_internal_endpoints_reject_unauthorized_callers_before_processing(path, monkeypatch):
     with TestClient(app) as api, patch("app.llm.client.complete") as complete:
         for authorization in (None, "Bearer wrong", "Basic test-backend-only-token"):
@@ -25,6 +25,6 @@ def test_internal_endpoints_reject_unauthorized_callers_before_processing(path, 
 
 def test_openapi_marks_only_internal_operations_as_bearer_protected():
     schema = app.openapi()
-    for path in ("/parse", "/narrate", "/ocr", "/catalog/candidates"):
+    for path in ("/narrate", "/ocr", "/catalog/candidates"):
         assert schema["paths"][path]["post"]["security"] == [{"HTTPBearer": []}]
     assert "security" not in schema["paths"]["/health"]["get"]

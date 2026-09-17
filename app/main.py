@@ -8,7 +8,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.catalog import router as catalog_router
 from app.narrate import router as narrate_router
 from app.ocr import router as ocr_router
-from app.parse import router as parse_router
 
 
 async def require_backend(
@@ -23,7 +22,7 @@ async def require_backend(
 
 
 app = FastAPI(title="요고비 AI 서버", description="백엔드 전용 내부 API. 프론트는 BE_main을 호출합니다.")
-for router in (parse_router, narrate_router, ocr_router, catalog_router):
+for router in (narrate_router, ocr_router, catalog_router):
     app.include_router(router, dependencies=[Depends(require_backend)])
 
 
