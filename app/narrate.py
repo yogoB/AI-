@@ -110,21 +110,17 @@ class NarrateResponse(BaseModel):
 def current_savings(request: "NarrateRequest") -> int | None:
     """지금 대비 절감액. None 이면 '지금'을 기준으로 말하지 않는다는 뜻이다.
 
-    BE 가 `currentMonthlySavings` 를 보내면 **그 값을 그대로 옮긴다** — 빼지 않는다.
-    아직 안 보내는 동안만 직접 뺀다(과도기). BE 배포가 끝나면 이 분기를 지운다.
+    **이 서버는 금액을 빼지 않는다**(절대 원칙 1). BE 가 준 값을 그대로 옮긴다.
+    두 필드는 같이 오거나 같이 없다(BE `NARRATE_FIELDS`) — 하나만 오면 말하지 않는다.
 
-    두 값이 다 왔는데 서로 맞지 않으면 **아무 말도 하지 않고 정가 기준으로 물러난다.**
-    서로 빼지지 않는 두 수를 한 화면에 나란히 놓느니 덜 말하는 편이 낫다.
-    (여기 뺄셈은 화면에 나갈 금액이 아니라 두 수가 맞는지 보는 검사다.)
+    다만 **두 수가 서로 빼지지 않으면 정가 기준으로 물러난다.** 여기 뺄셈은 화면에 나갈
+    금액이 아니라 두 수가 맞는지 보는 검사다. 서로 안 맞는 두 수를 한 화면에 나란히 놓느니
+    덜 말하는 편이 낫다 — BE 가 두 값을 같은 계산에서 내지만 언젠가 갈라질 수 있다.
     """
-    total = request.currentMonthlyTotal
-    if total is None:
+    total, given = request.currentMonthlyTotal, request.currentMonthlySavings
+    if total is None or given is None:
         return None
-    computed = total - request.monthlyTotal
-    given = request.currentMonthlySavings
-    if given is None:
-        return computed
-    return given if given == computed else None
+    return given if given == total - request.monthlyTotal else None
 
 
 def known_numbers(request: "NarrateRequest") -> set[int]:

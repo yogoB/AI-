@@ -493,9 +493,11 @@ def test_an_informational_notice_is_not_turned_into_a_question():
 
 
 def narrate_with_current(current, **changes):
+    """BE 는 두 필드를 **같이** 보낸다(`NARRATE_FIELDS`). 절감액을 안 적으면 같이 채워 준다."""
     request = deepcopy(BREAKDOWN) | changes
     if current is not None:
         request["currentMonthlyTotal"] = current
+        request.setdefault("currentMonthlySavings", current - request["monthlyTotal"])
     return narrate(request).json()
 
 
@@ -537,7 +539,8 @@ def test_the_gap_is_quotable_so_a_reason_using_it_is_not_discarded():
     # known_numbers 에 없으면 금액 가드가 그 문장을 버린다.
     from app.narrate import NarrateRequest, current_savings, known_numbers
 
-    request = NarrateRequest.model_validate(deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000})
+    request = NarrateRequest.model_validate(
+        deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000, "currentMonthlySavings": 18700})
     assert current_savings(request) == 18700
     known = known_numbers(request)
     assert 90000 in known and 18700 in known
@@ -586,3 +589,15 @@ def test_the_supplied_saving_is_quotable():
         deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000, "currentMonthlySavings": 18700})
     assert current_savings(request) == 18700
     assert 18700 in known_numbers(request)
+
+
+def test_the_total_alone_is_not_enough_to_speak_in_current_terms():
+    """두 필드는 같이 오거나 같이 없다. 하나만 오면 '지금' 기준으로 말하지 않는다.
+
+    이 서버는 빼지 않기 때문이다(절대 원칙 1) — 절감액이 없으면 말할 수가 없다.
+    설명이 죽지는 않는다. 정가 기준으로 물러날 뿐이다.
+    """
+    request = deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000}
+    body = narrate(request).json()
+    assert "지금 내시는" not in body["message"]
+    assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
