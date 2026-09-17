@@ -15,6 +15,7 @@ AMOUNT = re.compile(r"\d[\d,]*(?=\s*원)|\d{1,3}(?:,\d{3})+|\d{4,}")
 BENEFIT_NOTE = "제휴 혜택 적용"
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
+Notice = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[^\r\n]+$")]
 # BE `RecommendationService.missingInputs`가 실제로 내보내는 값. 사용자에게 보여줄 한국어 이름이다.
 # 여기 없는 값이 오면 그 항목만 문장에서 빠진다 — 안내 하나 때문에 금액 설명 전체를 막지 않는다.
 FIELD_LABELS = {
@@ -74,6 +75,9 @@ class NarrateRequest(BaseModel):
 class NarrateResponse(BaseModel):
     message: str
     reasons: list[Reason] = Field(default_factory=list, max_length=3)
+    # 결과 화면의 ⓘ 안내 줄. 화면이 조립하던 것을 여기로 모은다(D-46) —
+    # 같은 값으로 두 곳에서 문장을 만들면 표현이 갈라진다(UX_POLICY 규칙 6).
+    notices: list[Notice] = Field(default_factory=list, max_length=10)
 
 
 def known_numbers(request: "NarrateRequest") -> set[int]:
@@ -149,6 +153,26 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
             if len(reason) <= 80 and quotes_known_amounts_only(reason, known)][:3]
 
 
+def notices_for(request: "NarrateRequest") -> list[str]:
+    """화면 상단 ⓘ 안내. BE 가 준 문장을 그대로 잇는다 — 여기서 새로 쓰지 않는다.
+
+    `impact`·`howToFind`는 BE 가 쓴 자유 서술이다. 내레이터가 고쳐 쓰면 "최대 11,000원"
+    같은 구체적인 안내가 뭉개진다. 잇기만 하고, 잇는 규칙만 한 곳에서 정한다.
+
+    "결과 없음" 안내는 여기서 만들지 않는다 — BE 는 결과가 있을 때만 내레이터를 부른다.
+    그 경우 화면이 직접 말해야 한다.
+    """
+    lines = []
+    for missing in request.missingInputs:
+        impact = missing.impact.strip()
+        if not impact:
+            continue
+        how = (missing.howToFind or "").strip()
+        lines.append(f"{impact} — {how}" if how else impact)
+    # 화면 한 줄이 300자를 넘으면 읽히지 않는다. 자르지 않고 통째로 뺀다 — 잘린 안내는 오해를 만든다.
+    return [line for line in lines if len(line) <= 300][:10]
+
+
 @router.post("/narrate", response_model=NarrateResponse)
 async def narrate(request: NarrateRequest) -> NarrateResponse:
     # ponytail: 고정 문구로 금액 생성을 막는다. 설명 종류가 늘면 검증된 문구를 추가한다.
@@ -178,4 +202,5 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         fields = ", ".join(dict.fromkeys(known_fields))
         sentences.append(f"추가로 {fields} 정보를 알려주시면 더 정확해져요.")
 
-    return NarrateResponse(message=" ".join(sentences), reasons=rule_reasons(request))
+    return NarrateResponse(message=" ".join(sentences), reasons=rule_reasons(request),
+                           notices=notices_for(request))

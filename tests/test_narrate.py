@@ -356,3 +356,28 @@ def test_a_four_digit_candidate_count_survives_the_amount_guard():
                                      "breakdown": [{"label": "기본료", "amount": 38000,
                                                     "provenance": "OFFICIAL"}]}
     assert rules_only(request) == ["조건에 맞는 조합 1,706개 중 가장 싼 선택이에요."]
+
+
+def test_notices_join_backend_guidance_without_rewriting_it():
+    """`impact`·`howToFind`는 BE가 쓴 문장이다. 고쳐 쓰면 "최대 11,000원" 같은 구체성이 뭉개진다."""
+    request = deepcopy(BREAKDOWN)
+    request["missingInputs"] = [
+        {"field": "hasFamilyBundle", "impact": "가족 결합 시 최대 11,000원 추가 절감 가능",
+         "howToFind": "통신사 마이페이지 > 결합 상품"},
+        {"field": "networkType", "impact": "망 종류를 알면 더 정확해져요"},   # howToFind 없음
+    ]
+    notices = narrate(request).json()["notices"]
+    assert notices == ["가족 결합 시 최대 11,000원 추가 절감 가능 — 통신사 마이페이지 > 결합 상품",
+                       "망 종류를 알면 더 정확해져요"]
+
+
+def test_a_notice_too_long_to_read_is_dropped_rather_than_cut():
+    # 잘린 안내는 오해를 만든다. 통째로 빼는 편이 낫다.
+    request = deepcopy(BREAKDOWN)
+    request["missingInputs"] = [{"field": "hasFamilyBundle", "impact": "가" * 301}]
+    assert narrate(request).json()["notices"] == []
+
+
+def test_no_missing_inputs_means_no_notices():
+    request = deepcopy(BREAKDOWN) | {"missingInputs": []}
+    assert narrate(request).json()["notices"] == []
