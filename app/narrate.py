@@ -24,8 +24,15 @@ GROUNDABLE = {"OFFICIAL", "DERIVED", "USER_PROVIDED"}
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
 Notice = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[^\r\n]+$")]
-# BE `RecommendationService.missingInputs`가 실제로 내보내는 값. 사용자에게 보여줄 한국어 이름이다.
-# 여기 없는 값이 오면 그 항목만 문장에서 빠진다 — 안내 하나 때문에 금액 설명 전체를 막지 않는다.
+# **"더 알려주시면 정확해져요" 문장에 넣을 필드만** 여기 적는다. 라벨 사전이 아니다.
+#
+# BE 의 `missingInputs` 는 두 가지를 같은 목록으로 보낸다:
+#   ① 요청 — "가족 결합 중이라면 할인액을 알려주세요"
+#   ② 통보 — "가족결합 할인 11,000원은 SKT 요금제에만 반영했어요"
+# 필드 이름만으로는 둘을 못 가른다. `familyBundleDiscountKrw` 가 실제로 양쪽에 다 쓰인다.
+# ②를 여기 넣으면 이미 답한 것을 다시 묻는 문장이 나간다 — 화면의 안내와 정면으로 어긋난다.
+# 그래서 **모르는 값은 이 문장에서 조용히 빠지는 것이 맞다.** 안내 원문은 `notices` 가 그대로 나른다.
+# 새 필드를 추가할 때는 BE 의 `impact` 문구를 읽고 ①인지 확인한 뒤에만 적는다.
 FIELD_LABELS = {
     "monthlyDataGb": "월 데이터 사용량",
     "wantedServiceIds": "이용하고 싶은 구독 서비스",

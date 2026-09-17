@@ -468,3 +468,25 @@ def test_a_malformed_provenance_is_still_rejected():
     for bad in ("official", "USER PROVIDED", "", "1ST"):
         response = narrate_breakdown([{"label": "기본료", "amount": 1, "provenance": bad}])
         assert response.status_code == 422, bad
+
+
+def test_an_informational_notice_is_not_turned_into_a_question():
+    """BE 는 `missingInputs` 로 "더 알려달라"와 "이렇게 처리했다"를 **같이** 보낸다.
+
+    `familyBundleDiscountKrw` 가 실제로 양쪽에 쓰인다 — 할인액을 안 줬을 때는 요청이지만,
+    다른 통신사 요금제가 추천됐을 때는 "적어 주신 11,000원은 SKT 에만 반영했어요"라는 통보다.
+    후자를 "추가로 알려주시면 더 정확해져요"로 바꾸면 **이미 답한 것을 다시 묻는다.**
+    안내 원문은 notices 가 그대로 나르므로 문장에서는 빠지는 것이 맞다.
+    """
+    request = deepcopy(BREAKDOWN) | {"missingInputs": [
+        {"field": "familyBundleDiscountKrw",
+         "impact": "가족결합 할인 11,000원은 SKT 요금제에만 반영했어요",
+         "howToFind": "지금 통신사 안에서 바꾸면 할인은 그대로예요"},
+        {"field": "networkType", "impact": "망 종류를 지정하면 후보를 더 정확히 좁혀요"},
+    ]}
+    body = narrate(request).json()
+    assert "추가로 현재 망 종류 정보를 알려주시면 더 정확해져요." in body["message"]
+    assert "가족결합" not in body["message"]
+    # 빠지는 것은 문장뿐이다 — 안내는 두 줄 그대로 화면에 간다.
+    assert len(body["notices"]) == 2
+    assert any("11,000원은 SKT" in notice for notice in body["notices"])

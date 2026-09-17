@@ -12,7 +12,7 @@ FROM python:3.12-slim
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 COPY --from=build /app/.venv /app/.venv
-# 프롬프트는 앱 실행에 필요하다(app/prompts/*.txt). 스크립트·테스트는 넣지 않는다.
+# 앱 소스만 넣는다. 테스트·문서는 .dockerignore 로 뺀다.
 COPY app ./app
 EXPOSE 8000
 # 요청당 하는 일은 외부 HTTP 대기뿐이라 워커를 늘릴 이유가 없다. 동시성은 asyncio 가 맡는다.
