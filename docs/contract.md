@@ -76,6 +76,10 @@ AI 모델·API 요청/응답에는 회원 인증 필드를 추가하지 않는�
 기존 요청도 받을 수 있도록 위 3개 필드는 선택 값이다. 설명에 새 금액이나 문구를 추가하지 않는다.
 백엔드는 설명할 `CostResult` 한 건과 상위 응답의 `missingInputs`를 합쳐 전달한다.
 공통 응답 외피(`data`, `warnings`)와 `accuracy`, `results` 목록 전체는 요청에 포함하지 않는다.
+G-29·G-30(2026-09-17): `/recommendations` 응답에 `current`(지금 쓰는 요금제의 금액과 1순위 대비 절감액)가 생겼고,
+요청에 `optional.currentPlanId`가 생겼다. **`/narrate` 요청에는 넣지 않는다** — 설명 대상은 여전히 1순위 한 건이다.
+`missingInputs[].field`에 `currentPlanId`·`familyBundleDiscountKrw`가 올 수 있다. 열거로 묶지 않는 설계 그대로,
+모르는 필드는 그 항목만 문장에서 빠지고 `notices`에는 `impact`가 그대로 실린다.
 D-18(2026-09-15): BE의 우체국·스마트초이스 연동과 `CostResult.priceCrossCheck` 필드를 제거했다.
 D-20(2026-09-16, 사용자 승인): `priceCrossCheck`가 `/recommendations` 응답에 **복구됐다**. `/narrate` 요청에는 넣지 않는다 — BE가 계약 9필드만 남겨 보낸다(`AiGateway.NARRATE_FIELDS`). `extra=forbid`는 유지한다. 계약 밖 필드는 422로 거부하며, 그 거부가 곧 표류 감지다(BE는 422를 장애로 삼켜 사유가 조용히 사라지므로 BE 쪽에서 막는다). 카탈로그는 검수·승인된 CSV를 DB에 반영한다. 정보 오류 제보 `POST /api/v1/catalog/reports`는 BE가 접수만 하며 AI 호출이나 가격 자동 수정은 하지 않는다.
 
