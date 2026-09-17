@@ -20,6 +20,8 @@ REASON_CACHE = Lru(limit=256)
 BENEFIT_NOTE = "제휴 혜택 적용"
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
+# BE `RecommendationService.missingInputs`가 실제로 내보내는 값. 사용자에게 보여줄 한국어 이름이다.
+# 여기 없는 값이 오면 그 항목만 문장에서 빠진다 — 안내 하나 때문에 금액 설명 전체를 막지 않는다.
 FIELD_LABELS = {
     "monthlyDataGb": "월 데이터 사용량",
     "wantedServiceIds": "이용하고 싶은 구독 서비스",
@@ -27,6 +29,7 @@ FIELD_LABELS = {
     "networkType": "현재 망 종류",
     "contractType": "약정 유형",
     "hasFamilyBundle": "가족 결합 여부",
+    "ageLimit": "가입 자격",
 }
 
 
@@ -40,12 +43,17 @@ class BreakdownItem(BaseModel):
 
 
 class MissingInput(BaseModel):
+    """추가 입력 안내 한 건. **보조 정보다.**
+
+    `field`를 Literal로 묶었더니 BE가 `ageLimit` 안내를 더한 날부터 422가 났고,
+    BE는 그것을 장애로 삼켜 금액 설명과 사유가 통째로 사라졌다(D-38과 같은 사고).
+    구조는 계속 엄격하게 본다(`extra=forbid`) — 모르는 **필드**는 여전히 거부한다.
+    다만 모르는 **값**은 그 항목만 문장에서 빠뜨린다. 안내 하나가 설명 전체를 막지 않는다.
+    """
+
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    field: Literal[
-        "monthlyDataGb", "wantedServiceIds", "currentCarrier",
-        "networkType", "contractType", "hasFamilyBundle",
-    ]
+    field: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
     impact: str = Field(max_length=1000)
     howToFind: str | None = Field(default=None, max_length=1000)
 
@@ -62,6 +70,10 @@ class NarrateRequest(BaseModel):
     carrier: Label
     breakdown: list[BreakdownItem] = Field(max_length=100)
     missingInputs: list[MissingInput] = Field(default_factory=list, max_length=100)
+    # 이 조합이 몇 개의 후보 중에서 뽑혔는지. BE 가 정렬한 후보 전체 수다.
+    # 기준 카탈로그 1,706개 중 1,645개는 제휴 혜택도 약정할인도 없어 절감액이 0이다.
+    # 그런 요금제는 "왜 추천됐나"에 쓸 근거가 이 값 하나뿐이다.
+    candidateCount: int | None = Field(default=None, ge=1)
 
 
 class NarrateResponse(BaseModel):
@@ -84,7 +96,8 @@ def known_numbers(request: "NarrateRequest") -> set[int]:
     numbers = {
         abs(value)
         for value in (request.monthlyTotal, request.baseline, request.monthlySavings,
-                      request.annualSavings, *(item.amount for item in request.breakdown))
+                      request.annualSavings, request.candidateCount,
+                      *(item.amount for item in request.breakdown))
         if value is not None
     }
     texts = [request.planName, request.carrier]
@@ -130,7 +143,17 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
             )
     candidates = benefits + discounts
     if request.monthlySavings > 0:
-        candidates.append(f"그래서 지금보다 월 {request.monthlySavings:,}원 덜 내세요.")
+        # 월·연을 한 문장에 담는다. 자리는 3개뿐이라 두 줄로 쪼개면 다른 근거가 밀린다.
+        annual = request.annualSavings
+        candidates.append(
+            f"그래서 지금보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
+            if annual and annual > 0
+            else f"그래서 지금보다 월 {request.monthlySavings:,}원 덜 내세요."
+        )
+    if request.candidateCount and request.candidateCount > 1:
+        # 혜택도 할인도 없는 요금제(기준 카탈로그의 96%)에는 이 문장이 유일한 근거다.
+        # 절감액이 0이어도 "조건에 맞는 것 중 가장 싸다"는 사실은 남는다.
+        candidates.append(f"조건에 맞는 조합 {request.candidateCount:,}개 중 가장 싼 선택이에요.")
     # 모델이 만든 문장과 같은 관문을 통과시킨다. 생성 방식이 달라도 나가는 규칙은 하나다.
     known = known_numbers(request)
     return [reason for reason in candidates
@@ -186,8 +209,10 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
     ]
     if estimated:
         sentences.append(f"{', '.join(estimated)} 항목은 추정치예요.")
-    if request.missingInputs:
-        fields = ", ".join(dict.fromkeys(FIELD_LABELS[item.field] for item in request.missingInputs))
+    known_fields = [FIELD_LABELS[item.field] for item in request.missingInputs
+                    if item.field in FIELD_LABELS]
+    if known_fields:
+        fields = ", ".join(dict.fromkeys(known_fields))
         sentences.append(f"추가로 {fields} 정보를 알려주시면 더 정확해져요.")
 
     return NarrateResponse(message=" ".join(sentences), reasons=await curate_reasons(request))

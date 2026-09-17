@@ -70,7 +70,8 @@ Claude의 [도구 입력 스키마](https://platform.claude.com/docs/en/agents-a
 ```
 
 `monthlyTotal`, `baseline`, `monthlySavings`, `planName`, `carrier`, `breakdown`이 필수이며
-`missingInputs`, `planId`, `annualSavings`, `howToFind`는 생략할 수 있다.
+`missingInputs`, `planId`, `annualSavings`, `candidateCount`, `howToFind`는 생략할 수 있다.
+BE는 `message`와 `reasons`를 `/recommendations` 응답에 그대로 실어 결과 화면이 렌더링한다.
 백엔드의 `CostResult`에 상위 응답의 `missingInputs`를 합쳐 전달한다.
 추천 응답의 `data.results`에서는 백엔드가 설명할 결과를 정하고, 계산기 응답에서는 `data.result`를 사용한다.
 `data`, `warnings`, `accuracy` 외피나 결과 목록 전체를 `/narrate`로 보내지 않는다.
@@ -85,11 +86,18 @@ Claude의 [도구 입력 스키마](https://platform.claude.com/docs/en/agents-a
 자유 서술인 `note`·`impact`·`howToFind`는 설명에 복사하지 않으며, 계약에 판정 정보가 없는
 미사용 혜택 제외·해지 제안도 생성하지 않는다.
 
-추천 사유 `reasons`는 두 곳에서 나온다. 모델이 있으면 모델이 문장을 고르고,
-키가 없거나 모델이 실패하면 `rule_reasons`가 같은 값으로 문장을 만든다.
+**이 엔드포인트는 모델 API 키 없이 동작한다.** `message`는 고정 템플릿이고,
+`reasons`는 모델이 있으면 모델이 고르고 없으면 `rule_reasons`가 같은 값으로 만든다.
 두 경로 모두 같은 금액 가드를 통과하므로 요청에 없는 금액은 어느 쪽에서도 나가지 않는다.
-따라서 **모델 없이도 "왜 추천됐나" 목록이 비지 않는다.** 규칙은 제휴 혜택 줄, 할인 줄, 절감액 순으로
-최대 3문장을 만들고, `provenance`가 `ESTIMATED`인 줄은 근거로 쓰지 않는다.
+규칙은 제휴 혜택 줄 → 할인 줄 → 절감액(월·연 한 문장) → 후보 수 순으로 최대 3문장을 만들고,
+`provenance`가 `ESTIMATED`인 줄은 근거로 쓰지 않는다.
+
+`candidateCount`는 정렬 대상이 된 후보 요금제 수다. 기준 카탈로그 1,706개 중 1,645개는 제휴 혜택도
+약정할인도 없어 절감액이 0이라, 그런 요금제에는 이 값이 사유의 유일한 근거다
+("조건에 맞는 조합 127개 중 가장 싼 선택이에요"). 자리가 남을 때만 들어가 실제 혜택을 밀어내지 않는다.
+
+`missingInputs[].field`는 값을 열거로 묶지 않는다. BE가 안내 종류를 늘려도 422로 설명 전체를 막지 않기
+위해서다. 모르는 값은 그 항목만 문장에서 빠지고, 모르는 **필드**는 계속 422다.
 
 BE는 `/narrate` 요청에 계약 필드만 싣는다(`AiGateway.NARRATE_FIELDS`).
 `CostResult`에는 AI가 쓰지 않는 내부 필드가 더 있고, `extra=forbid`라 하나라도 새면 422가 된다.

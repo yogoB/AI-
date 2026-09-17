@@ -58,7 +58,9 @@ def test_backend_cost_result_metadata_is_accepted_without_changing_message():
         baseline = api.post("/narrate", json=BREAKDOWN)
         response = api.post("/narrate", json=request)
     assert response.status_code == 200
-    assert response.json() == baseline.json()
+    # 금액 문장은 그대로다. planId 는 어디에도 쓰지 않고, annualSavings 는 사유에서만 쓴다.
+    assert response.json()["message"] == baseline.json()["message"]
+    assert "212,400원" in " ".join(response.json()["reasons"])
 
 
 @pytest.mark.parametrize(("savings", "sentence"), [
@@ -125,7 +127,6 @@ def test_freeform_notes_do_not_invent_savings_or_actions():
     {"breakdown": [{"label": "기본료", "amount": 55.5, "provenance": "OFFICIAL"}]},
     {"breakdown": [{"label": "기본료", "amount": True, "provenance": "OFFICIAL"}]},
     {"breakdown": [{"label": "기본료", "amount": 55000, "provenance": "UNKNOWN"}]},
-    {"missingInputs": [{"field": "unknownField", "impact": "알 수 없는 입력"}]},
     {"missingInputs": [{"field": "hasFamilyBundle", "impact": "확인 필요", "howToFind": 1}]},
     {"history": ["이전 대화"]},
 ])
@@ -335,3 +336,77 @@ def test_the_korean_particle_follows_the_label(label, expected):
     from app.narrate import connective
 
     assert connective(label) == expected
+
+
+def test_a_new_missing_input_field_does_not_take_down_the_whole_explanation():
+    """BE 가 안내 종류를 늘려도 금액 설명과 사유는 그대로 나간다.
+
+    `ageLimit` 이 실제로 그랬다 — Literal 로 묶어 둔 탓에 422 가 났고 BE 가 장애로 삼켰다.
+    구조는 계속 엄격하게 본다. 모르는 **값**만 그 항목을 문장에서 빠뜨린다.
+    """
+    request = deepcopy(BREAKDOWN)
+    request["missingInputs"] = [
+        {"field": "ageLimit", "impact": "가입 자격이 필요한 요금제 43건은 뺐어요",
+         "howToFind": "자격이 있다면 통신사에서 더 싼 요금제를 찾을 수 있어요"},
+        {"field": "hasFamilyBundle", "impact": "가족 결합 시 결합할인이 추가로 반영돼요"},
+        {"field": "notInventedYet", "impact": "아직 없는 안내"},
+    ]
+    response = narrate(request, reasons=["월 17,700원 덜 내세요."])
+    assert response.status_code == 200
+    assert response.json()["reasons"] == ["월 17,700원 덜 내세요."]
+    message = response.json()["message"]
+    # 아는 값만 문장에 넣는다. 모르는 값은 조용히 빠진다 — 없는 이름을 지어내지 않는다.
+    assert "추가로 가입 자격, 가족 결합 여부 정보를 알려주시면 더 정확해져요." in message
+    assert "notInventedYet" not in message
+
+
+def test_a_structural_change_is_still_rejected():
+    # 값은 너그럽게, 구조는 엄격하게. 모르는 필드가 늘면 여기서 잡힌다.
+    request = deepcopy(BREAKDOWN)
+    request["missingInputs"] = [{"field": "ageLimit", "impact": "안내", "severity": "high"}]
+    with TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
+        assert api.post("/narrate", json=request).status_code == 422
+
+
+def test_a_plan_with_no_benefit_and_no_discount_still_gets_a_reason():
+    """기준 카탈로그 1,706개 중 1,645개가 이 경우다 — 혜택도 할인도 없어 절감액이 0이다.
+
+    순위 근거가 없으면 사유 섹션이 대부분의 추천에서 통째로 사라진다.
+    """
+    request = deepcopy(BREAKDOWN) | {
+        "monthlySavings": 0, "annualSavings": 0, "candidateCount": 127,
+        "breakdown": [{"label": "유심 7GB 기본료", "amount": 38000, "provenance": "OFFICIAL"}],
+    }
+    assert rules_only(request) == ["조건에 맞는 조합 127개 중 가장 싼 선택이에요."]
+
+
+def test_the_saving_sentence_carries_the_year_in_the_same_line():
+    # 자리가 3개뿐이라 월·연을 두 줄로 쪼개면 다른 근거가 밀린다.
+    request = deepcopy(BREAKDOWN) | {"annualSavings": 212400}
+    assert "그래서 지금보다 월 17,700원, 1년이면 212,400원 덜 내세요." in rules_only(request)
+
+
+def test_the_ranking_reason_never_pushes_out_a_real_benefit():
+    request = deepcopy(BREAKDOWN) | {"candidateCount": 127}
+    request["breakdown"].append({"label": "넷플릭스 스탠다드", "amount": 0,
+                                 "provenance": "OFFICIAL", "note": "제휴 혜택 적용"})
+    reasons = rules_only(request)
+    assert len(reasons) == 3
+    assert "구독을" in reasons[0]
+    assert all("가장 싼 선택" not in reason for reason in reasons)
+
+
+def test_a_single_candidate_is_not_described_as_the_cheapest_of_many():
+    # 후보가 하나뿐이면 비교한 것이 없다. 비교했다고 말하지 않는다.
+    request = deepcopy(BREAKDOWN) | {"monthlySavings": 0, "candidateCount": 1,
+                                     "breakdown": [{"label": "기본료", "amount": 38000,
+                                                    "provenance": "OFFICIAL"}]}
+    assert rules_only(request) == []
+
+
+def test_a_four_digit_candidate_count_survives_the_amount_guard():
+    # "1,706개"는 금액처럼 보인다. 요청에 있는 값이라 통과해야 한다.
+    request = deepcopy(BREAKDOWN) | {"monthlySavings": 0, "candidateCount": 1706,
+                                     "breakdown": [{"label": "기본료", "amount": 38000,
+                                                    "provenance": "OFFICIAL"}]}
+    assert rules_only(request) == ["조건에 맞는 조합 1,706개 중 가장 싼 선택이에요."]
