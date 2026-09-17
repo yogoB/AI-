@@ -27,8 +27,36 @@ AI와 BE_main의 환경 변수 `AI_INTERNAL_TOKEN`에 **동일한 임의 토큰*
 - `/health`는 토큰 없이 사용 가능하다. `/docs`의 Authorize에는 내부 토큰만 입력한다.
 
 [FastAPI 의존성](https://fastapi.tiangolo.com/tutorial/dependencies/dependencies-in-path-operation-decorators/)으로
-네 API에 같은 검증을 적용한다. 배포 시 AI는 사설 주소로 연결하거나 네트워크에서 BE의 접근만 허용한다.
-현재 저장소에서 구현한 것은 요청 인증이며, 실제 배포망 설정은 별도다.
+네 API에 같은 검증을 적용한다.
+
+## 배포 (Fly.io · 사설 전용)
+
+**인터넷에 노출하지 않는다.** 공개 IP 없이 flycast(Fly 프록시를 지나는 사설 IPv6) 하나만 두고
+BE(`yogob-api`)만 `http://yogob-ai.flycast`로 부른다. `.internal`은 프록시를 우회해 멈춘 머신을
+깨우지 못하므로 `auto_stop`과 같이 쓸 수 없다.
+
+```bash
+fly apps create yogob-ai --org personal
+fly ips allocate-v6 --private -a yogob-ai     # 공개 IP 는 할당하지 않는다
+fly deploy --ha=false
+fly ips list -a yogob-ai                      # private ingress 한 줄만 나와야 한다
+```
+
+내부 토큰은 한 번 만들어 **양쪽에 같은 값**을 넣는다. AI 앱에 먼저 넣는다 —
+BE가 먼저 주소를 알면 그동안 401을 받아 설명이 빈다.
+
+```bash
+TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+fly secrets set AI_INTERNAL_TOKEN="$TOKEN" -a yogob-ai
+fly secrets set AI_INTERNAL_TOKEN="$TOKEN" AI_SERVER_URL=http://yogob-ai.flycast -a yogob-api
+unset TOKEN
+```
+
+두 앱의 `fly secrets list`에서 `AI_INTERNAL_TOKEN`의 DIGEST가 같아야 한다.
+
+**`ANTHROPIC_API_KEY`는 운영에 넣지 않아도 된다.** `/narrate`의 설명 문장과 추천 사유는
+결정론적 경로로 나온다(절대 원칙 5). 모델 키는 운영자 경로(`/catalog/candidates`·추출 배치)에만 필요하다.
+자세한 배포 순서와 확인 방법은 `BE_main/docs/deploy.md` §3-2에 있다.
 
 `POST /parse`는 `{"text":"데이터 20기가 정도 쓰고 넷플릭스 보고 싶어요"}`를 받는다.
 `text`는 공백을 제외한 내용이 있어야 하며 최대 4,000자다.

@@ -1,0 +1,30 @@
+# 요고비 AI 서버. **공개 IP 를 두지 않는다** — BE 만 사설망으로 부른다(BE_main/docs/architecture.md §2).
+# 주소는 `yogob-ai.flycast` 다: Fly 프록시를 지나는 사설 IPv6 라 멈춰 있는 머신도 요청이 깨운다.
+# (`.internal` 은 프록시를 우회해 곧장 머신으로 가므로 autostop 과 같이 쓸 수 없다.)
+#
+# app 이름 주의: 같은 조직에 yogob(프론트)·yogob-api(BE)가 있다. 이름이 겹치면 나중 배포가 앞선 것을
+# 덮는다(2026-09-16 실제로 겪었다). 이 앱은 yogob-ai 로 분리한다.
+app = "yogob-ai"
+primary_region = "nrt"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  # 사설망 전용이라 TLS 종단이 없다. true 로 두면 BE 의 http 호출이 리다이렉트로 깨진다.
+  force_https = false
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # /health 는 내부 토큰 없이 200 을 준다. 모델 키도 필요 없다.
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
