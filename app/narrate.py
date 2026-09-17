@@ -94,6 +94,9 @@ class NarrateRequest(BaseModel):
     # 이 값이 있으면 절감의 기준이 **정가가 아니라 지금**이다 — 히어로가 "지금보다 얼마"를 말하는데
     # 문장이 "정가 대비 절약 없음"이라고 말하던 모순이 이 필드가 생긴 이유다.
     currentMonthlyTotal: int | None = Field(default=None, ge=0)
+    # 지금 대비 절감액(BE 응답 `current.monthlySavings` = 현재 − 추천). 음수면 추천이 더 비싸다.
+    # 이 값이 오면 내레이터는 빼지 않고 옮기기만 한다 — 절대 원칙 1 을 글자 그대로 지킨다.
+    currentMonthlySavings: int | None = None
 
 
 class NarrateResponse(BaseModel):
@@ -104,17 +107,24 @@ class NarrateResponse(BaseModel):
     notices: list[Notice] = Field(default_factory=list, max_length=10)
 
 
-def current_gap(request: "NarrateRequest") -> int | None:
-    """지금 내는 금액과 추천 금액의 차. **이 서버가 하는 유일한 산술이다.**
+def current_savings(request: "NarrateRequest") -> int | None:
+    """지금 대비 절감액. None 이면 '지금'을 기준으로 말하지 않는다는 뜻이다.
 
-    절대 원칙 1은 금액 계산을 금지한다. 이 뺄셈만 계약이 명시적으로 허용한다 —
-    BE 가 준 두 수의 차이고, 새 금액을 만드는 것이 아니라 둘의 관계를 말하기 위한 것이다.
-    두 수가 같은 기준으로 계산됐다는 보증은 BE 가 한다(`current.cost.monthlyTotal`, 같은 계산기).
-    새 금액이 필요해지면 여기서 만들지 말고 BE 에 필드를 요청한다.
+    BE 가 `currentMonthlySavings` 를 보내면 **그 값을 그대로 옮긴다** — 빼지 않는다.
+    아직 안 보내는 동안만 직접 뺀다(과도기). BE 배포가 끝나면 이 분기를 지운다.
+
+    두 값이 다 왔는데 서로 맞지 않으면 **아무 말도 하지 않고 정가 기준으로 물러난다.**
+    서로 빼지지 않는 두 수를 한 화면에 나란히 놓느니 덜 말하는 편이 낫다.
+    (여기 뺄셈은 화면에 나갈 금액이 아니라 두 수가 맞는지 보는 검사다.)
     """
-    if request.currentMonthlyTotal is None:
+    total = request.currentMonthlyTotal
+    if total is None:
         return None
-    return abs(request.currentMonthlyTotal - request.monthlyTotal)
+    computed = total - request.monthlyTotal
+    given = request.currentMonthlySavings
+    if given is None:
+        return computed
+    return given if given == computed else None
 
 
 def known_numbers(request: "NarrateRequest") -> set[int]:
@@ -127,7 +137,7 @@ def known_numbers(request: "NarrateRequest") -> set[int]:
         abs(value)
         for value in (request.monthlyTotal, request.baseline, request.monthlySavings,
                       request.annualSavings, request.candidateCount, request.currentMonthlyTotal,
-                      current_gap(request),
+                      request.currentMonthlySavings, current_savings(request),
                       *(item.amount for item in request.breakdown))
         if value is not None
     }
@@ -225,9 +235,9 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
     sentences = [
         f'“{request.carrier} {request.planName}”의 실제 내시는 금액은 월 {request.monthlyTotal:,}원이에요.',
     ]
-    current = request.currentMonthlyTotal
-    if current is None:
-        # 지금 내는 금액을 모를 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
+    current, savings = request.currentMonthlyTotal, current_savings(request)
+    if savings is None:
+        # 지금 내는 금액을 모르거나 두 수가 안 맞을 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
         sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
         if request.monthlySavings > 0:
             sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
@@ -239,14 +249,13 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
             )
     else:
         # 지금 내는 금액을 알면 그것이 기준이다. 사용자가 궁금한 것은 정가가 아니라 자기 요금이다.
-        gap = current_gap(request)
-        if request.monthlyTotal < current:
-            sentences.append(f"지금 내시는 월 {current:,}원보다 월 {gap:,}원 덜 내요.")
-        elif request.monthlyTotal == current:
+        if savings > 0:
+            sentences.append(f"지금 내시는 월 {current:,}원보다 월 {savings:,}원 덜 내요.")
+        elif savings == 0:
             sentences.append("지금 내시는 금액과 같아요.")
         else:
             sentences.append(
-                f"지금보다 월 {gap:,}원 더 내는 조합이에요 — 원하시는 데이터·구독을 다 담으면 이렇게 돼요."
+                f"지금보다 월 {abs(savings):,}원 더 내는 조합이에요 — 원하시는 데이터·구독을 다 담으면 이렇게 돼요."
             )
 
     # 우리가 계산하지 않은 값은 그렇다고 밝힌다. 출처가 여럿이면 각각 한 문장이다.

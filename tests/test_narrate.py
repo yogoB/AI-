@@ -535,10 +535,10 @@ def test_a_pricier_combination_says_so_and_says_why():
 
 def test_the_gap_is_quotable_so_a_reason_using_it_is_not_discarded():
     # known_numbers 에 없으면 금액 가드가 그 문장을 버린다.
-    from app.narrate import NarrateRequest, current_gap, known_numbers
+    from app.narrate import NarrateRequest, current_savings, known_numbers
 
     request = NarrateRequest.model_validate(deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000})
-    assert current_gap(request) == 18700
+    assert current_savings(request) == 18700
     known = known_numbers(request)
     assert 90000 in known and 18700 in known
 
@@ -551,3 +551,38 @@ def test_the_reason_says_list_price_not_now():
     body = narrate_with_current(90000)
     assert any("정가보다 월 17,700원" in reason for reason in body["reasons"])
     assert all("지금보다" not in reason for reason in body["reasons"])
+
+
+def test_the_backend_supplied_saving_is_copied_not_recomputed():
+    """BE 가 `current.monthlySavings` 를 보내면 내레이터는 빼지 않고 옮기기만 한다(절대 원칙 1).
+
+    운영에서 확인한 값을 그대로 쓴다 — 현재 70,390원, 지금보다 17,100원 덜 냄.
+    """
+    body = narrate_with_current(70390, monthlyTotal=53290, currentMonthlySavings=17100)
+    assert "지금 내시는 월 70,390원보다 월 17,100원 덜 내요." in body["message"]
+
+
+def test_two_numbers_that_do_not_subtract_are_not_shown_side_by_side():
+    """BE 가 보낸 절감액이 두 금액의 차와 안 맞으면 '지금' 기준으로 말하지 않는다.
+
+    서로 빼지지 않는 두 수를 한 화면에 나란히 놓느니 정가 기준으로 물러나는 편이 낫다.
+    422 로 설명 전체를 죽이지도 않는다 — 오늘만 그 사고를 세 번 봤다.
+    """
+    body = narrate_with_current(90000, currentMonthlySavings=999)
+    assert "지금 내시는" not in body["message"]
+    assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
+    assert body["reasons"]  # 설명 자체는 살아 있다
+
+
+def test_a_negative_supplied_saving_means_the_combination_costs_more():
+    body = narrate_with_current(60000, currentMonthlySavings=-11300)
+    assert "지금보다 월 11,300원 더 내는 조합이에요" in body["message"]
+
+
+def test_the_supplied_saving_is_quotable():
+    from app.narrate import NarrateRequest, current_savings, known_numbers
+
+    request = NarrateRequest.model_validate(
+        deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000, "currentMonthlySavings": 18700})
+    assert current_savings(request) == 18700
+    assert 18700 in known_numbers(request)
