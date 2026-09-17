@@ -89,6 +89,11 @@ class NarrateRequest(BaseModel):
     # 기준 카탈로그 1,706개 중 1,645개는 제휴 혜택도 약정할인도 없어 절감액이 0이다.
     # 그런 요금제는 "왜 추천됐나"에 쓸 근거가 이 값 하나뿐이다.
     candidateCount: int | None = Field(default=None, ge=1)
+    # 지금 쓰는 요금제로 같은 구독을 유지했을 때의 실질월비용(BE 응답 `current.cost.monthlyTotal`).
+    # BE 가 `optional.currentPlanId` 를 받았을 때만 싣는다. 없으면 필드 자체가 없다.
+    # 이 값이 있으면 절감의 기준이 **정가가 아니라 지금**이다 — 히어로가 "지금보다 얼마"를 말하는데
+    # 문장이 "정가 대비 절약 없음"이라고 말하던 모순이 이 필드가 생긴 이유다.
+    currentMonthlyTotal: int | None = Field(default=None, ge=0)
 
 
 class NarrateResponse(BaseModel):
@@ -97,6 +102,19 @@ class NarrateResponse(BaseModel):
     # 결과 화면의 ⓘ 안내 줄. 화면이 조립하던 것을 여기로 모은다(D-46) —
     # 같은 값으로 두 곳에서 문장을 만들면 표현이 갈라진다(UX_POLICY 규칙 6).
     notices: list[Notice] = Field(default_factory=list, max_length=10)
+
+
+def current_gap(request: "NarrateRequest") -> int | None:
+    """지금 내는 금액과 추천 금액의 차. **이 서버가 하는 유일한 산술이다.**
+
+    절대 원칙 1은 금액 계산을 금지한다. 이 뺄셈만 계약이 명시적으로 허용한다 —
+    BE 가 준 두 수의 차이고, 새 금액을 만드는 것이 아니라 둘의 관계를 말하기 위한 것이다.
+    두 수가 같은 기준으로 계산됐다는 보증은 BE 가 한다(`current.cost.monthlyTotal`, 같은 계산기).
+    새 금액이 필요해지면 여기서 만들지 말고 BE 에 필드를 요청한다.
+    """
+    if request.currentMonthlyTotal is None:
+        return None
+    return abs(request.currentMonthlyTotal - request.monthlyTotal)
 
 
 def known_numbers(request: "NarrateRequest") -> set[int]:
@@ -108,7 +126,8 @@ def known_numbers(request: "NarrateRequest") -> set[int]:
     numbers = {
         abs(value)
         for value in (request.monthlyTotal, request.baseline, request.monthlySavings,
-                      request.annualSavings, request.candidateCount,
+                      request.annualSavings, request.candidateCount, request.currentMonthlyTotal,
+                      current_gap(request),
                       *(item.amount for item in request.breakdown))
         if value is not None
     }
@@ -157,10 +176,13 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
     if request.monthlySavings > 0:
         # 월·연을 한 문장에 담는다. 자리는 3개뿐이라 두 줄로 쪼개면 다른 근거가 밀린다.
         annual = request.annualSavings
+        # "지금보다"가 아니라 "정가보다"다 — monthlySavings 는 baseline 기준이다.
+        # message 가 `currentMonthlyTotal` 로 '지금'을 말하기 시작하면 같은 화면에서 두 수가 충돌한다.
+        # 화면의 '정가 기준' 열과 같은 말을 쓴다.
         candidates.append(
-            f"그래서 지금보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
+            f"정가보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
             if annual and annual > 0
-            else f"그래서 지금보다 월 {request.monthlySavings:,}원 덜 내세요."
+            else f"정가보다 월 {request.monthlySavings:,}원 덜 내세요."
         )
     if request.candidateCount and request.candidateCount > 1:
         # 혜택도 할인도 없는 요금제(기준 카탈로그의 96%)에는 이 문장이 유일한 근거다.
@@ -202,16 +224,30 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
     # ponytail: 고정 문구로 금액 생성을 막는다. 설명 종류가 늘면 검증된 문구를 추가한다.
     sentences = [
         f'“{request.carrier} {request.planName}”의 실제 내시는 금액은 월 {request.monthlyTotal:,}원이에요.',
-        f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.",
     ]
-    if request.monthlySavings > 0:
-        sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
-    elif request.monthlySavings == 0:
-        sentences.append(f"월 {request.monthlySavings:,}원 절약으로, 절약되는 금액은 없어요.")
+    current = request.currentMonthlyTotal
+    if current is None:
+        # 지금 내는 금액을 모를 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
+        sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
+        if request.monthlySavings > 0:
+            sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
+        elif request.monthlySavings == 0:
+            sentences.append(f"월 {request.monthlySavings:,}원 절약으로, 절약되는 금액은 없어요.")
+        else:
+            sentences.append(
+                f"월 {request.monthlySavings:,}원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."
+            )
     else:
-        sentences.append(
-            f"월 {request.monthlySavings:,}원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."
-        )
+        # 지금 내는 금액을 알면 그것이 기준이다. 사용자가 궁금한 것은 정가가 아니라 자기 요금이다.
+        gap = current_gap(request)
+        if request.monthlyTotal < current:
+            sentences.append(f"지금 내시는 월 {current:,}원보다 월 {gap:,}원 덜 내요.")
+        elif request.monthlyTotal == current:
+            sentences.append("지금 내시는 금액과 같아요.")
+        else:
+            sentences.append(
+                f"지금보다 월 {gap:,}원 더 내는 조합이에요 — 원하시는 데이터·구독을 다 담으면 이렇게 돼요."
+            )
 
     # 우리가 계산하지 않은 값은 그렇다고 밝힌다. 출처가 여럿이면 각각 한 문장이다.
     for source, note in SOURCE_NOTES.items():

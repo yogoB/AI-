@@ -24,7 +24,7 @@ BREAKDOWN = {
 # BREAKDOWN 으로 규칙이 만드는 사유. 모델이 없거나 죽었을 때 이 값이 나간다.
 RULE_REASONS = [
     "“선택약정 25% 할인”으로 월 13,750원이 빠져요.",
-    "그래서 지금보다 월 17,700원 덜 내세요.",
+    "정가보다 월 17,700원 덜 내세요.",
 ]
 
 
@@ -198,7 +198,7 @@ def test_the_exact_payload_backend_sends_is_accepted():
     }
     response = narrate(payload)
     assert response.status_code == 200
-    assert response.json()["reasons"] == ["그래서 지금보다 월 17,700원, 1년이면 212,400원 덜 내세요."]
+    assert response.json()["reasons"] == ["정가보다 월 17,700원, 1년이면 212,400원 덜 내세요."]
 
 
 @pytest.mark.parametrize("field", ["monthlySavings", "annualSavings"])
@@ -257,7 +257,7 @@ def test_reasons_lead_with_the_cause_and_close_with_the_saving():
     reasons = rules_only(request)
     assert len(reasons) == 3
     assert "구독을" in reasons[0] and "빠져요" in reasons[1]
-    assert reasons[-1] == "그래서 지금보다 월 17,700원 덜 내세요."
+    assert reasons[-1] == "정가보다 월 17,700원 덜 내세요."
 
 
 def test_no_saving_means_no_saving_sentence():
@@ -270,7 +270,7 @@ def test_a_label_too_long_to_read_is_left_out_rather_than_cut():
     request = deepcopy(BREAKDOWN)
     request["breakdown"] = [{"label": "긴" * 100, "amount": -13750, "provenance": "DERIVED"}]
     reasons = rules_only(request)
-    assert reasons == ["그래서 지금보다 월 17,700원 덜 내세요."]
+    assert reasons == ["정가보다 월 17,700원 덜 내세요."]
 
 
 @pytest.mark.parametrize(("label", "expected"), [
@@ -328,7 +328,7 @@ def test_a_plan_with_no_benefit_and_no_discount_still_gets_a_reason():
 def test_the_saving_sentence_carries_the_year_in_the_same_line():
     # 자리가 3개뿐이라 월·연을 두 줄로 쪼개면 다른 근거가 밀린다.
     request = deepcopy(BREAKDOWN) | {"annualSavings": 212400}
-    assert "그래서 지금보다 월 17,700원, 1년이면 212,400원 덜 내세요." in rules_only(request)
+    assert "정가보다 월 17,700원, 1년이면 212,400원 덜 내세요." in rules_only(request)
 
 
 def test_the_ranking_reason_never_pushes_out_a_real_benefit():
@@ -490,3 +490,64 @@ def test_an_informational_notice_is_not_turned_into_a_question():
     # 빠지는 것은 문장뿐이다 — 안내는 두 줄 그대로 화면에 간다.
     assert len(body["notices"]) == 2
     assert any("11,000원은 SKT" in notice for notice in body["notices"])
+
+
+def narrate_with_current(current, **changes):
+    request = deepcopy(BREAKDOWN) | changes
+    if current is not None:
+        request["currentMonthlyTotal"] = current
+    return narrate(request).json()
+
+
+def test_without_the_current_bill_the_sentences_stay_list_price_based():
+    # 지금 내는 금액을 모르면 기준은 정가뿐이다. 기존 동작 그대로여야 한다.
+    body = narrate_with_current(None)
+    assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
+    assert "월 17,700원 절약할 수 있어요." in body["message"]
+    assert "지금 내시는" not in body["message"]
+
+
+def test_the_current_bill_becomes_the_yardstick_when_the_backend_sends_it():
+    """화면 히어로가 "지금보다 얼마"를 말하는데 문장은 "정가 대비 절약 없음"이라고 말하던 모순.
+
+    라이트 모드 실사용에서 실제로 본 값이다 — 현재 72,500원, 추천 21,490원인데
+    절감액(정가 대비)은 0이라 "절약되는 금액은 없어요"가 나갔다.
+    """
+    body = narrate_with_current(72500, monthlyTotal=21490, baseline=21490,
+                                monthlySavings=0, annualSavings=0)
+    assert "지금 내시는 월 72,500원보다 월 51,010원 덜 내요." in body["message"]
+    # 지금을 아는 순간 정가 문장 두 개는 빠진다. 같은 화면에서 두 기준이 싸우지 않게.
+    assert "정가로 내는 금액은" not in body["message"]
+    assert "절약되는 금액은 없어요" not in body["message"]
+
+
+def test_the_same_amount_is_said_plainly():
+    body = narrate_with_current(71300)
+    assert "지금 내시는 금액과 같아요." in body["message"]
+
+
+def test_a_pricier_combination_says_so_and_says_why():
+    # 원하는 데이터·구독을 다 담으면 지금보다 비쌀 수 있다. 감추지 않는다.
+    body = narrate_with_current(60000)
+    assert "지금보다 월 11,300원 더 내는 조합이에요" in body["message"]
+    assert "원하시는 데이터·구독을 다 담으면" in body["message"]
+
+
+def test_the_gap_is_quotable_so_a_reason_using_it_is_not_discarded():
+    # known_numbers 에 없으면 금액 가드가 그 문장을 버린다.
+    from app.narrate import NarrateRequest, current_gap, known_numbers
+
+    request = NarrateRequest.model_validate(deepcopy(BREAKDOWN) | {"currentMonthlyTotal": 90000})
+    assert current_gap(request) == 18700
+    known = known_numbers(request)
+    assert 90000 in known and 18700 in known
+
+
+def test_the_reason_says_list_price_not_now():
+    """사유의 절감액은 baseline 기준이다. message 가 '지금'을 말하기 시작하면 두 수가 충돌한다.
+
+    화면의 '정가 기준' 열과 같은 말을 쓴다.
+    """
+    body = narrate_with_current(90000)
+    assert any("정가보다 월 17,700원" in reason for reason in body["reasons"])
+    assert all("지금보다" not in reason for reason in body["reasons"])
