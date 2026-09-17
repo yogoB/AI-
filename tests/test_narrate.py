@@ -1,5 +1,4 @@
 from copy import deepcopy
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,18 +28,16 @@ RULE_REASONS = [
 ]
 
 
-def narrate(request, reasons=..., side_effect=None):
-    """추천 사유만 모델이 만든다. 금액 문장은 고정 문구다."""
-    result = {} if reasons is ... else {"reasons": reasons}
-    with patch("app.llm.client.complete", side_effect=side_effect, return_value=result), \
-            TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
+def narrate(request):
+    """금액 문장도 사유도 규칙이 만든다. 같은 입력이면 같은 출력이다."""
+    with TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
         return api.post("/narrate", json=request)
 
 
 def test_contract_example_preserves_backend_amounts():
-    response = narrate(BREAKDOWN, reasons=["선택약정 25% 할인으로 월 13,750원이 빠져요."])
+    response = narrate(BREAKDOWN)
     assert response.status_code == 200
-    assert response.json()["reasons"] == ["선택약정 25% 할인으로 월 13,750원이 빠져요."]
+    assert response.json()["reasons"] == RULE_REASONS
     assert response.json()["message"] == (
         "“SKT 5G 슬림+”의 실제 내시는 금액은 월 71,300원이에요. "
         "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요. "
@@ -144,44 +141,33 @@ def test_missing_amount_is_not_filled_in():
     assert response.status_code == 422
 
 
-def test_reason_quoting_an_invented_number_is_dropped():
-    # 절대원칙 #2: 백엔드가 주지 않은 숫자는 사유 문장에도 넣지 못한다.
-    response = narrate(BREAKDOWN, reasons=[
-        "선택약정 25% 할인으로 월 13,750원이 빠져요.",
-        "1년이면 212,400원을 아껴요.",
-        "기본료가 49,900원이라 더 저렴해요.",
-    ])
-    assert response.status_code == 200
-    assert response.json()["reasons"] == ["선택약정 25% 할인으로 월 13,750원이 빠져요."]
+def test_the_amount_guard_drops_a_line_quoting_an_unknown_amount():
+    """규칙은 BE 값만 쓰지만 가드는 그대로 둔다 — 문장을 늘릴 때 잘못 들어오는 금액을 여기서 막는다."""
+    from app.narrate import NarrateRequest, known_numbers, quotes_known_amounts_only
+
+    known = known_numbers(NarrateRequest(**BREAKDOWN))
+    assert quotes_known_amounts_only("선택약정 25% 할인으로 월 13,750원이 빠져요.", known)
+    assert not quotes_known_amounts_only("1년이면 212,400원을 아껴요.", known)   # 아직 안 받은 값
+    assert not quotes_known_amounts_only("기본료가 49,900원이라 더 저렴해요.", known)
 
 
 def test_plain_numbers_are_not_treated_as_amounts():
-    # 금액 가드는 금액만 본다. 단위 표현까지 막으면 쓸 수 있는 문장이 남지 않는다.
-    response = narrate(BREAKDOWN, reasons=["1년 내내 선택약정 25% 할인이 유지돼요."])
-    assert response.json()["reasons"] == ["1년 내내 선택약정 25% 할인이 유지돼요."]
+    # 금액 가드는 금액만 본다. "1년"·"25%" 까지 막으면 쓸 수 있는 문장이 남지 않는다.
+    from app.narrate import NarrateRequest, known_numbers, quotes_known_amounts_only
+
+    known = known_numbers(NarrateRequest(**BREAKDOWN))
+    assert quotes_known_amounts_only("1년 내내 선택약정 25% 할인이 유지돼요.", known)
 
 
-def test_annual_savings_becomes_quotable_once_the_backend_sends_it():
+def test_annual_savings_is_quoted_once_the_backend_sends_it():
     request = deepcopy(BREAKDOWN) | {"annualSavings": 212400}
-    response = narrate(request, reasons=["1년이면 212,400원을 아껴요."])
-    assert response.json()["reasons"] == ["1년이면 212,400원을 아껴요."]
+    reasons = narrate(request).json()["reasons"]
+    assert "1년이면 212,400원 덜 내세요." in " ".join(reasons)
 
 
-def test_model_failure_falls_back_to_rule_reasons():
-    # 모델 키가 없거나 모델이 죽어도 "왜 추천됐나"가 비지 않는다. 표현만 투박해진다.
-    from app.llm import client
-
-    response = narrate(BREAKDOWN, side_effect=client.LLMError("down"))
-    assert response.status_code == 200
-    assert response.json()["reasons"] == RULE_REASONS
-    assert "71,300원" in response.json()["message"]
-
-
-def test_malformed_model_output_is_discarded():
-    response = narrate(BREAKDOWN, reasons=["줄바꿈이\n들어간 사유"])
-    assert response.status_code == 200
-    assert "줄바꿈이" not in " ".join(response.json()["reasons"])
-    assert response.json()["reasons"] == RULE_REASONS
+def test_the_same_request_always_gets_the_same_sentences():
+    """재현되지 않는 설명은 금액 서비스에서 신뢰를 깎는다. 규칙이라 두 번 물어도 같다."""
+    assert narrate(BREAKDOWN).json() == narrate(BREAKDOWN).json()
 
 
 def test_hypothetical_savings_from_missing_inputs_cannot_be_quoted():
@@ -190,47 +176,9 @@ def test_hypothetical_savings_from_missing_inputs_cannot_be_quoted():
     request = deepcopy(BREAKDOWN)
     request["missingInputs"] = [{"field": "hasFamilyBundle",
                                  "impact": "가족 결합 시 최대 11,000원 추가 절감 가능"}]
-    response = narrate(request, reasons=["가족 결합으로 월 11,000원을 더 아껴요."])
+    response = narrate(request)
     assert "11,000" not in " ".join(response.json()["reasons"])
     assert "가족 결합 여부" in response.json()["message"]
-
-
-def test_identical_requests_reuse_the_first_answer():
-    from unittest.mock import AsyncMock
-
-    stub = AsyncMock(return_value={"reasons": ["월 17,700원 덜 내세요."]})
-    with patch("app.llm.client.complete", stub), \
-            TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
-        first = api.post("/narrate", json=BREAKDOWN)
-        second = api.post("/narrate", json=BREAKDOWN)
-    assert first.json()["reasons"] == second.json()["reasons"] == ["월 17,700원 덜 내세요."]
-    assert stub.await_count == 1
-
-
-def test_a_changed_recommendation_is_explained_again():
-    from unittest.mock import AsyncMock
-
-    cheaper = deepcopy(BREAKDOWN) | {"monthlyTotal": 65000}
-    stub = AsyncMock(return_value={"reasons": ["월 17,700원 덜 내세요."]})
-    with patch("app.llm.client.complete", stub), \
-            TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
-        api.post("/narrate", json=BREAKDOWN)
-        api.post("/narrate", json=cheaper)
-    assert stub.await_count == 2
-
-
-def test_a_model_outage_is_not_cached():
-    from unittest.mock import AsyncMock
-
-    from app.llm import client
-
-    stub = AsyncMock(side_effect=[client.LLMError("down"), {"reasons": ["월 17,700원 덜 내세요."]}])
-    with patch("app.llm.client.complete", stub), \
-            TestClient(app, headers={"Authorization": "Bearer test-backend-only-token"}) as api:
-        # 장애 응답은 규칙 문장으로 대신하되 캐시에 남기지 않는다. 다음 요청은 다시 모델을 부른다.
-        assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == RULE_REASONS
-        assert api.post("/narrate", json=BREAKDOWN).json()["reasons"] == ["월 17,700원 덜 내세요."]
-    assert stub.await_count == 2
 
 
 def test_the_exact_payload_backend_sends_is_accepted():
@@ -249,23 +197,21 @@ def test_the_exact_payload_backend_sends_is_accepted():
         "missingInputs": [{"field": "hasFamilyBundle", "impact": "가족 결합 시 절감 가능",
                            "howToFind": None}],
     }
-    response = narrate(payload, reasons=["기본료가 월 55,000원이에요."])
+    response = narrate(payload)
     assert response.status_code == 200
-    assert response.json()["reasons"] == ["기본료가 월 55,000원이에요."]
+    assert response.json()["reasons"] == ["그래서 지금보다 월 17,700원, 1년이면 212,400원 덜 내세요."]
 
 
 @pytest.mark.parametrize("field", ["monthlySavings", "annualSavings"])
 def test_a_worse_combination_still_gets_an_explanation(field):
     # 절감액이 음수여도 422가 아니다. BE는 baseline보다 비싼 조합도 설명을 요구한다.
     request = deepcopy(BREAKDOWN) | {field: -10000}
-    assert narrate(request, reasons=[]).status_code == 200
+    assert narrate(request).status_code == 200
 
 
 def rules_only(request):
-    """모델이 없을 때 나가는 사유. 키 미설정도 LLMError 로 들어오는 같은 경로다."""
-    from app.llm import client
-
-    return narrate(request, side_effect=client.LLMError("no key")).json()["reasons"]
+    """규칙이 만든 사유. 이 서버에는 다른 공급자가 없다."""
+    return narrate(request).json()["reasons"]
 
 
 def test_a_field_backend_must_strip_is_rejected_rather_than_ignored():
@@ -351,9 +297,9 @@ def test_a_new_missing_input_field_does_not_take_down_the_whole_explanation():
         {"field": "hasFamilyBundle", "impact": "가족 결합 시 결합할인이 추가로 반영돼요"},
         {"field": "notInventedYet", "impact": "아직 없는 안내"},
     ]
-    response = narrate(request, reasons=["월 17,700원 덜 내세요."])
+    response = narrate(request)
     assert response.status_code == 200
-    assert response.json()["reasons"] == ["월 17,700원 덜 내세요."]
+    assert response.json()["reasons"] == RULE_REASONS
     message = response.json()["message"]
     # 아는 값만 문장에 넣는다. 모르는 값은 조용히 빠진다 — 없는 이름을 지어내지 않는다.
     assert "추가로 가입 자격, 가족 결합 여부 정보를 알려주시면 더 정확해져요." in message

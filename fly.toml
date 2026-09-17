@@ -4,7 +4,7 @@
 #
 # app 이름 주의: 같은 조직에 yogob(프론트)·yogob-api(BE)가 있다. 이름이 겹치면 나중 배포가 앞선 것을
 # 덮는다(2026-09-16 실제로 겪었다). 이 앱은 yogob-ai 로 분리한다.
-app = "yogob-ai"
+app = "yogob-narrator"
 primary_region = "nrt"
 
 [build]

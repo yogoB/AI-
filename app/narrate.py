@@ -1,21 +1,16 @@
 import re
-from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.cache import Lru
-from app.llm import client
 
 router = APIRouter()
-PROMPT = (Path(__file__).parent / "prompts" / "narrate.txt").read_text(encoding="utf-8")
 NUMBER = re.compile(r"\d[\d,]*")
 # 금액으로 읽히는 형태만 검사한다: "원" 앞, 천 단위 구분, 네 자리 이상.
 # "1년", "25%", "3위" 같은 일반 수는 금액이 아니므로 통과시킨다.
 # ponytail: 금액 아닌 허위 서술은 프롬프트로 막는다. 사실 검증이 필요해지면 그때 규칙을 늘린다.
 AMOUNT = re.compile(r"\d[\d,]*(?=\s*원)|\d{1,3}(?:,\d{3})+|\d{4,}")
-REASON_CACHE = Lru(limit=256)
 # BE `CostCalculator`가 제휴 혜택이 적용된 줄에 붙이는 표식. 프론트 `results.js`도 같은 값을 본다.
 BENEFIT_NOTE = "제휴 혜택 적용"
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
@@ -81,12 +76,6 @@ class NarrateResponse(BaseModel):
     reasons: list[Reason] = Field(default_factory=list, max_length=3)
 
 
-class ReasonResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
-
-    reasons: list[Reason] = Field(max_length=3)
-
-
 def known_numbers(request: "NarrateRequest") -> set[int]:
     """이번 추천에 실제로 반영된 금액만. 라벨·노트 안의 숫자도 같은 계산의 일부라 인용을 허용한다.
 
@@ -121,9 +110,9 @@ def connective(word: str) -> str:
 
 
 def rule_reasons(request: "NarrateRequest") -> list[str]:
-    """모델 없이 만드는 사유. BE가 준 값만 인용하므로 금액을 만들지 않는다(절대 원칙 2).
+    """사유는 규칙이 만든다. BE가 준 값만 인용하므로 금액을 만들지 않는다(절대 원칙 2).
 
-    모델 키가 없거나 모델이 죽어도 "왜 추천됐나"가 비지 않는다 — 표현만 투박해진다.
+    같은 입력이면 같은 문장이 나온다 — 재현되지 않는 설명은 금액 서비스에서 신뢰를 깎는다.
     breakdown에 있는 항목만 읽으므로 미사용 혜택은 근거에 등장하지 않는다(절대 원칙 1).
     추정치 줄은 근거로 쓰지 않는다. message가 이미 추정치임을 따로 안내한다.
     ponytail: 기본료가 '낮다'는 판단은 비교 대상이 없어 만들지 않는다. 절감액 문장이 그 결론을 대신한다.
@@ -154,36 +143,10 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
         # 혜택도 할인도 없는 요금제(기준 카탈로그의 96%)에는 이 문장이 유일한 근거다.
         # 절감액이 0이어도 "조건에 맞는 것 중 가장 싸다"는 사실은 남는다.
         candidates.append(f"조건에 맞는 조합 {request.candidateCount:,}개 중 가장 싼 선택이에요.")
-    # 모델이 만든 문장과 같은 관문을 통과시킨다. 생성 방식이 달라도 나가는 규칙은 하나다.
+    # 나가기 전 마지막 관문: BE가 준 금액 외의 금액이 섞인 줄은 버린다.
     known = known_numbers(request)
     return [reason for reason in candidates
             if len(reason) <= 80 and quotes_known_amounts_only(reason, known)][:3]
-
-
-async def curate_reasons(request: "NarrateRequest") -> list[str]:
-    """같은 추천이면 같은 사유다. 결과 화면의 인라인 수정은 1순위가 그대로인 경우가 많아
-    재호출이 잦다. 요청 내용만으로 키를 만들어 모델 왕복을 건너뛴다.
-    대화 이력이나 사용자 식별자를 보관하지 않으므로 무상태 원칙(절대 원칙 3)은 유지된다.
-    ponytail: 프로세스 안의 단순 LRU다. 서버를 여러 대로 늘리면 적중률만 떨어지고 정확도는 그대로다.
-
-    모델은 표현을 다듬을 뿐 사유의 유일한 공급자가 아니다. 키가 없거나 모델이 죽으면
-    `rule_reasons`가 같은 값으로 문장을 만든다 — 그래야 "모델 장애 = 빈 화면"이 되지 않는다.
-    """
-    key = request.model_dump_json()
-    if (cached := REASON_CACHE.get(key)) is not None:
-        return cached
-    fallback = rule_reasons(request)
-    try:
-        raw = await client.complete(PROMPT, key, ReasonResult.model_json_schema(), max_tokens=512)
-        reasons = ReasonResult.model_validate(raw).reasons
-    except (client.LLMError, client.InvalidLLMResponse, ValidationError):
-        # 일시적 장애를 캐시에 남기지 않는다. 다음 요청은 다시 모델을 부른다.
-        return fallback
-    known = known_numbers(request)
-    curated = [reason for reason in reasons if quotes_known_amounts_only(reason, known)]
-    # 모델이 아무것도 내놓지 못했거나 전부 폐기됐으면 규칙 문장으로 채운다. 빈 섹션보다 낫다.
-    REASON_CACHE.put(key, curated or fallback)
-    return curated or fallback
 
 
 @router.post("/narrate", response_model=NarrateResponse)
@@ -215,4 +178,4 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         fields = ", ".join(dict.fromkeys(known_fields))
         sentences.append(f"추가로 {fields} 정보를 알려주시면 더 정확해져요.")
 
-    return NarrateResponse(message=" ".join(sentences), reasons=await curate_reasons(request))
+    return NarrateResponse(message=" ".join(sentences), reasons=rule_reasons(request))

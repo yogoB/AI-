@@ -1,7 +1,7 @@
 [project]
-name = "yogobi-ai"
+name = "yogobi-narrator"
 version = "0.1.0"
-description = "요고비 AI 서버"
+description = "요고비 내레이터 — 백엔드가 계산한 금액을 한국어 문장으로 바꾼다"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard-no-fastapi-cloud-cli]>=0.141.1",

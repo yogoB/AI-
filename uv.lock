@@ -972,7 +972,7 @@ wheels = [
 ]
 
 [[package]]
-name = "yogobi-ai"
+name = "yogobi-narrator"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

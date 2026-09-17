@@ -9,16 +9,16 @@
 사용자 발화
   → [BE_main] POST /api/v1/chat/messages
   → [BE_main] 내부 recommend 호출 (필터 경로와 동일 로직)
-  → [AI] POST /narrate          결과 → 한국어 설명
+  → [내레이터] POST /narrate          결과 → 한국어 설명
   → 사용자
 ```
 
-**AI 서버는 백엔드를 호출하지 않는다.** 백엔드가 AI 서버를 호출한다. 단방향이다.
-프론트는 BE_main API만 호출하며 AI 서버에 직접 요청하지 않는다.
-BE 원본 §2에 맞춰 두 서버가 비밀 환경 변수 `AI_INTERNAL_TOKEN`을 공유한다.
-BE가 `Authorization: Bearer <AI_INTERNAL_TOKEN>`을 생성하며 프론트의 사용자 인증 헤더는 전달하지 않는다.
-`/narrate`·`/ocr`·`/catalog/candidates`는 토큰 누락·불일치 시 401, 서버 토큰 미설정·잘못된 설정 시 503
-(`detail.code: AI-AUTH-001`)으로 차단하고 모델을 호출하지 않는다. `/health`는 토큰 없이 사용한다.
+**내레이터는 백엔드를 호출하지 않는다.** 백엔드가 내레이터를 호출한다. 단방향이다.
+프론트는 BE_main API만 호출하며 내레이터에 직접 요청하지 않는다.
+BE 원본 §2에 맞춰 두 서버가 비밀 환경 변수 `NARRATOR_INTERNAL_TOKEN`을 공유한다.
+BE가 `Authorization: Bearer <NARRATOR_INTERNAL_TOKEN>`을 생성하며 프론트의 사용자 인증 헤더는 전달하지 않는다.
+`/narrate`는 토큰 누락·불일치 시 401, 서버 토큰 미설정·잘못된 설정 시 503
+(`detail.code: NARRATOR-AUTH-001`)으로 차단하고 모델을 호출하지 않는다. `/health`는 토큰 없이 사용한다.
 프론트 참고 명세는 BE의 `docs/BE_API.md`에서 관리한다. AI의 실제 네트워크 접근 제한은 배포 시 적용한다.
 
 ## 회원 인증 경계 (2026-09-10, BE 원본 §3 반영)
@@ -33,7 +33,7 @@ Google 로그인 시작/콜백은 `/oauth2/authorization/google`, `/login/oauth2
 BE의 `/api/v1/auth/signup`, `/login`, `/logout`, `/logout-all`, `/csrf`, `/google/link`, `/password` 상세는
 `BE_main/docs/auth.md`를 따른다. 계정은 이메일만으로 자동 병합하지 않고 기존 비밀번호·Google 재확인 후 연결한다.
 Google 전용 회원은 동일 Google sub 재확인으로 자체 비밀번호를 추가한다.
-**이 회원 쿠키·JWT·비밀번호·Google 토큰은 AI로 전달하지 않는다.** AI는 기존 AI_INTERNAL_TOKEN만 검증한다.
+**이 회원 쿠키·JWT·비밀번호·Google 토큰은 AI로 전달하지 않는다.** AI는 기존 NARRATOR_INTERNAL_TOKEN만 검증한다.
 AI 모델·API 요청/응답에는 회원 인증 필드를 추가하지 않는다.
 
 ## 개인정보 처리 경계 (2026-09-12, BE V5/V6 반영)
@@ -106,72 +106,6 @@ D-19(2026-09-16): `reasons`를 응답에 더했다. 요청 필드는 그대로�
 - `provenance`가 `ESTIMATED`인 항목은 "추정치예요"를 붙인다.
 - `missingInputs`가 있으면 마지막에 무엇을 더 알려주면 정확해지는지 한 문장 덧붙인다.
 - 3~5문장. 표나 목록을 만들지 않는다. 화면이 이미 보여준다.
-
-## 4. POST /ocr (선택 기능)
-
-통신사 앱 사용량 화면 스크린샷 → 사용량 추출.
-
-```json
-// 응답
-{ "monthlyDataGb": 18.4, "monthlyVoiceMin": 120, "monthlySmsCount": 30,
-  "confidence": 0.8 }
-```
-
-추출값은 백엔드에서 **`ESTIMATED`로 처리되고 사용자 확인을 거친다.**
-읽히지 않은 항목은 `null`로 둔다. 0으로 채우지 않는다.
-OCR의 소수 사용량·0은 그대로 보존한다. 추천 API가 요구하는 정수 조건과 원하는 구독 서비스는
-백엔드가 별도로 사용자 확인을 받아야 하며, OCR 값을 자동으로 반올림하거나 추천에 바로 넘기지 않는다.
-
-## 5. POST /catalog/candidates
-
-카탈로그에 없는 상품 1건을 공개 출처에서 찾아 **보고한다**(BE 원본 D-29의 2차 더블체크).
-사용자 요청 경로가 아니라 **운영자의 카탈로그 변경 승인 절차에서만** 호출된다.
-
-```json
-// 요청
-{ "query": "KT 베이직21GB Y덤", "productType": "MOBILE_PLAN" }
-
-// 응답
-{ "status": "CANDIDATE_FOUND",
-  "candidate": {
-    "productType": "MOBILE_PLAN", "provider": "KT", "productName": "베이직21GB Y덤",
-    "monthlyPriceWon": 58000, "networkType": "5G", "dataAllowanceText": "42GB + 1Mbps 속도제어",
-    "benefits": [], "eligibilityText": "만 34세 이하", "saleStatus": "AVAILABLE",
-    "promotionStartDate": null, "promotionEndDate": null,
-    "sourceUrl": "https://product.kt.com/..."
-  },
-  "confidence": 0.86,
-  "sources": [{ "url": "https://product.kt.com/...", "title": "요금제 상세", "pageAge": null }],
-  "checkedAt": "2026-09-16T12:40:00Z",
-  "clarifyingQuestion": null }
-```
-
-`query`는 2~300자, `productType`은 `MOBILE_PLAN` · `SUBSCRIPTION` 둘뿐이다. 정의되지 않은 필드는 거절한다.
-
-`status` 세 값의 뜻:
-
-| 값 | 뜻 | `candidate` |
-|---|---|---|
-| `CANDIDATE_FOUND` | 찾았다 | 객체 |
-| `NOT_FOUND` | 찾지 못했다 | `null` |
-| `NEEDS_INPUT` | 확신이 부족하다(`confidence < 0.7`) | `null`, `clarifyingQuestion` 동반 |
-
-### 규칙
-
-**AI는 숫자를 만들지 않는다**(절대 원칙 2). 공개된 출처를 찾아 그대로 보고할 뿐이고,
-그 값이 맞는지 판정하는 규칙은 **BE가 갖는다** — BE는 자기 값과 `monthlyPriceWon`을
-100원 이내 차이까지 같은 값으로 보고 `VERIFIED` / `MISMATCH`(승인 차단) / `UNVERIFIED`를 정한다.
-
-**`confidence` 게이트는 AI 쪽 책임이다.** BE는 이 값을 판정에 쓰지 않고 검토 메모에만 남긴다.
-확신이 0.7 미만이면 후보를 올리지 말고 `NEEDS_INPUT`으로 돌려준다 — 애매한 후보를 넘기면
-BE는 그것을 "확인된 금액"으로 취급한다.
-
-`sourceUrl`은 **`sources`에 실제로 있는 URL이어야 하고**, 허용 도메인(`CATALOG_ALLOWED_DOMAINS`)
-안이어야 한다. 모델이 지어낸 출처를 그대로 싣지 않기 위한 것이며, 어기면 502로 거절한다.
-응답의 `productType`이 요청과 다른 경우도 같다.
-
-찾지 못한 것은 `NOT_FOUND`로 돌려준다. **추측으로 채우지 않는다** — BE는 확인 못 한 것을
-"틀렸다"가 아니라 "확인 못 했다"로 처리하고 막지 않는다(사용자 제보로 보완, D-18).
 
 ## 6. 사용자 대면 문구
 
