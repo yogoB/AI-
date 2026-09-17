@@ -164,12 +164,17 @@ def notices_for(request: "NarrateRequest") -> list[str]:
     """
     lines = []
     for missing in request.missingInputs:
-        impact = missing.impact.strip()
+        # BE 의 자유 서술이라 줄바꿈이 섞일 수 있다. 그대로 두면 Notice 패턴에 걸려 응답이
+        # 통째로 500 이 되고 BE 는 그것을 장애로 삼켜 **설명 전체가 사라진다.**
+        # 공백으로 눌러 한 줄로 만든다 — 내용은 그대로이고 잘리지도 않는다.
+        impact = " ".join(missing.impact.split())
         if not impact:
             continue
-        how = (missing.howToFind or "").strip()
+        how = " ".join((missing.howToFind or "").split())
         lines.append(f"{impact} — {how}" if how else impact)
-    # 화면 한 줄이 300자를 넘으면 읽히지 않는다. 자르지 않고 통째로 뺀다 — 잘린 안내는 오해를 만든다.
+    # 300·10 은 BE `NarratorClient.lines(notices, 10, 300)` 와 같은 값이다.
+    # 하나라도 넘으면 BE 가 설명 전체를 폐기하므로 여기서 먼저 맞춘다.
+    # 넘는 줄은 자르지 않고 통째로 뺀다 — 잘린 안내는 오해를 만든다.
     return [line for line in lines if len(line) <= 300][:10]
 
 

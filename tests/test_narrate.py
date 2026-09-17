@@ -381,3 +381,33 @@ def test_a_notice_too_long_to_read_is_dropped_rather_than_cut():
 def test_no_missing_inputs_means_no_notices():
     request = deepcopy(BREAKDOWN) | {"missingInputs": []}
     assert narrate(request).json()["notices"] == []
+
+
+def notices_of(missing_inputs):
+    request = deepcopy(BREAKDOWN) | {"missingInputs": missing_inputs}
+    response = narrate(request)
+    assert response.status_code == 200, response.text[:200]
+    return response.json()["notices"]
+
+
+def test_a_line_break_in_backend_guidance_does_not_take_down_the_explanation():
+    """`impact`·`howToFind` 는 BE 의 자유 서술이라 줄바꿈이 섞일 수 있다.
+
+    그대로 두면 Notice 패턴에 걸려 응답이 500 이 되고, BE 는 그것을 장애로 삼켜
+    message·reasons 까지 전부 사라진다. 안내 한 줄 때문에 설명 전체를 잃지 않는다.
+    """
+    notices = notices_of([{"field": "contractType", "impact": "앞줄\n뒷줄",
+                           "howToFind": "가운데\r\n줄바꿈"}])
+    assert notices == ["앞줄 뒷줄 — 가운데 줄바꿈"]
+
+
+def test_the_notice_limits_are_the_same_numbers_the_backend_enforces():
+    """BE `NarratorClient.lines(notices, 10, 300)` 와 같은 값이어야 한다.
+
+    여기서 한 줄이라도 넘겨 보내면 BE 는 관대하게 자르지 않고 **설명 전체를 폐기한다.**
+    """
+    assert notices_of([{"field": "contractType", "impact": "가" * 300}]) == ["가" * 300]
+    assert notices_of([{"field": "contractType", "impact": "가" * 301}]) == []
+
+    many = [{"field": "contractType", "impact": f"안내 {n}"} for n in range(12)]
+    assert len(notices_of(many)) == 10
