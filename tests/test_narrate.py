@@ -123,7 +123,6 @@ def test_freeform_notes_do_not_invent_savings_or_actions():
     {"planName": "요금제\n추가 문장"},
     {"breakdown": [{"label": "기본료", "amount": 55.5, "provenance": "OFFICIAL"}]},
     {"breakdown": [{"label": "기본료", "amount": True, "provenance": "OFFICIAL"}]},
-    {"breakdown": [{"label": "기본료", "amount": 55000, "provenance": "UNKNOWN"}]},
     {"missingInputs": [{"field": "hasFamilyBundle", "impact": "확인 필요", "howToFind": 1}]},
     {"history": ["이전 대화"]},
 ])
@@ -411,3 +410,61 @@ def test_the_notice_limits_are_the_same_numbers_the_backend_enforces():
 
     many = [{"field": "contractType", "impact": f"안내 {n}"} for n in range(12)]
     assert len(notices_of(many)) == 10
+
+
+def narrate_breakdown(breakdown, **changes):
+    request = deepcopy(BREAKDOWN) | {"breakdown": breakdown} | changes
+    return narrate(request)
+
+
+def test_a_user_provided_amount_does_not_take_down_the_explanation():
+    """BE `Provenance` 는 4값인데 여기 Literal 은 3값이었다 — `USER_PROVIDED` 가 빠져 있었다.
+
+    가족결합 할인 줄이 그 출처로 나가므로, 가족결합을 적어 넣은 **모든** 사용자의 추천에서
+    422 가 났고 BE 가 장애로 삼켜 설명·사유·안내가 전부 사라졌다. 운영에서 재현한 사고다.
+    """
+    response = narrate_breakdown([
+        {"label": "기본료", "amount": 17000, "provenance": "OFFICIAL"},
+        {"label": "가족결합 할인", "amount": -5000, "provenance": "USER_PROVIDED"},
+    ])
+    assert response.status_code == 200
+    body = response.json()
+    # 우리가 계산한 값이 아니라는 것을 밝힌다. 추정치와는 다른 문장이다.
+    assert '“가족결합 할인”(-5,000원) 항목은 적어 주신 금액이에요.' in body["message"]
+    # 사용자가 적어 준 확정 금액이라 사유의 근거로 쓸 수 있다. 추정치와 다른 점이다.
+    assert '“가족결합 할인”으로 월 5,000원이 빠져요.' in body["reasons"]
+
+
+def test_an_unknown_provenance_degrades_instead_of_422():
+    """BE 가 출처를 또 늘려도 설명이 사라지지 않는다. 같은 사고가 세 번째라 값을 열거로 묶지 않는다.
+
+    모르는 출처는 문장을 붙이지 않고 근거로도 쓰지 않는다 — 얼마나 믿을 값인지 모르면서
+    "이래서 추천됐다"고 말하지 않는다.
+    """
+    response = narrate_breakdown([
+        {"label": "기본료", "amount": 20000, "provenance": "OFFICIAL"},
+        {"label": "알 수 없는 할인", "amount": -5000, "provenance": "PARTNER_QUOTED"},
+    ])
+    assert response.status_code == 200
+    body = response.json()
+    assert "알 수 없는 할인" not in body["message"]
+    assert all("알 수 없는 할인" not in reason for reason in body["reasons"])
+
+
+def test_an_estimate_is_still_told_apart_from_a_user_number():
+    body = narrate_breakdown([
+        {"label": "기본료", "amount": 20000, "provenance": "OFFICIAL"},
+        {"label": "가족결합 할인", "amount": -5000, "provenance": "USER_PROVIDED"},
+        {"label": "제휴 할인", "amount": -2000, "provenance": "ESTIMATED"},
+    ]).json()
+    assert "항목은 추정치예요." in body["message"]
+    assert "항목은 적어 주신 금액이에요." in body["message"]
+    # 추정치는 근거로 쓰지 않는다 — 확정된 할인처럼 읽힌다.
+    assert all("제휴 할인" not in reason for reason in body["reasons"])
+
+
+def test_a_malformed_provenance_is_still_rejected():
+    # 값은 너그럽게, 구조는 엄격하게. 출처 자리에 아무 문자열이나 오는 것은 계약 위반이다.
+    for bad in ("official", "USER PROVIDED", "", "1ST"):
+        response = narrate_breakdown([{"label": "기본료", "amount": 1, "provenance": bad}])
+        assert response.status_code == 422, bad

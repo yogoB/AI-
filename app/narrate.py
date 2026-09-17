@@ -1,5 +1,5 @@
 import re
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +13,14 @@ NUMBER = re.compile(r"\d[\d,]*")
 AMOUNT = re.compile(r"\d[\d,]*(?=\s*원)|\d{1,3}(?:,\d{3})+|\d{4,}")
 # BE `CostCalculator`가 제휴 혜택이 적용된 줄에 붙이는 표식. 프론트 `results.js`도 같은 값을 본다.
 BENEFIT_NOTE = "제휴 혜택 적용"
+# 출처별 한 줄 안내. 우리가 계산한 값이 아닌 것만 밝힌다. 아는 값에만 붙이고 모르는 값은 조용히 둔다.
+SOURCE_NOTES = {
+    "ESTIMATED": "추정치예요",
+    "USER_PROVIDED": "적어 주신 금액이에요",
+}
+# 사유의 근거로 쓸 수 있는 출처. 추정치는 확정된 할인처럼 읽혀 제외한다.
+# 모르는 출처도 제외한다 — 얼마나 믿을 값인지 모르면서 "이래서 추천됐다"고 말하지 않는다.
+GROUNDABLE = {"OFFICIAL", "DERIVED", "USER_PROVIDED"}
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
 Notice = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[^\r\n]+$")]
@@ -34,7 +42,11 @@ class BreakdownItem(BaseModel):
 
     label: Label
     amount: int
-    provenance: Literal["OFFICIAL", "DERIVED", "ESTIMATED"]
+    # Literal 로 묶지 않는다. BE `Provenance` 에 값이 늘 때마다 422 가 났고
+    # (`USER_PROVIDED` 가 실제로 그랬다 — 가족결합 사용자 전원의 설명이 사라졌다),
+    # BE 는 그것을 장애로 삼켜 아무도 알아채지 못했다. `MissingInput.field` 와 같은 사고다.
+    # **값은 너그럽게, 구조는 엄격하게**: 모르는 출처는 문장을 붙이지 않고 근거로도 쓰지 않는다.
+    provenance: str = Field(min_length=1, max_length=40, pattern=r"^[A-Z][A-Z0-9_]*$")
     note: str | None = Field(default=None, max_length=1000)
 
 
@@ -123,7 +135,7 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
     """
     benefits, discounts = [], []
     for item in request.breakdown:
-        if item.provenance == "ESTIMATED":
+        if item.provenance not in GROUNDABLE:
             continue
         if item.note == BENEFIT_NOTE:
             benefits.append(
@@ -194,13 +206,12 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
             f"월 {request.monthlySavings:,}원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."
         )
 
-    estimated = [
-        f'“{item.label}”({item.amount:,}원)'
-        for item in request.breakdown
-        if item.provenance == "ESTIMATED"
-    ]
-    if estimated:
-        sentences.append(f"{', '.join(estimated)} 항목은 추정치예요.")
+    # 우리가 계산하지 않은 값은 그렇다고 밝힌다. 출처가 여럿이면 각각 한 문장이다.
+    for source, note in SOURCE_NOTES.items():
+        labelled = [f'“{item.label}”({item.amount:,}원)'
+                    for item in request.breakdown if item.provenance == source]
+        if labelled:
+            sentences.append(f"{', '.join(labelled)} 항목은 {note}.")
     known_fields = [FIELD_LABELS[item.field] for item in request.missingInputs
                     if item.field in FIELD_LABELS]
     if known_fields:

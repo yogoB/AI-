@@ -59,6 +59,7 @@ AI 모델·API 요청/응답에는 회원 인증 필드를 추가하지 않는�
   "breakdown": [
     { "label": "5G 슬림+ 기본료", "amount": 55000, "provenance": "OFFICIAL" },
     { "label": "선택약정 25% 할인", "amount": -13750, "provenance": "DERIVED" },
+    { "label": "가족결합 할인", "amount": -5000, "provenance": "USER_PROVIDED" },
     { "label": "넷플릭스 스탠다드", "amount": 13500, "provenance": "OFFICIAL",
       "note": "제휴 혜택으로 4,000원 할인 적용" }
   ],
@@ -107,7 +108,15 @@ D-19(2026-09-16): `reasons`를 응답에 더했다. 요청 필드는 그대로�
   `ESTIMATED` 줄은 근거로 쓰지 않는다. 후보 수 문장은 자리가 남을 때만 들어가 실제 혜택을 밀어내지 않는다.
   모델 문장과 같은 금액 가드를 통과한다 — 생성 방식이 달라도 나가는 규칙은 하나다.
   근거가 없으면 빈 배열도 가능하고 `message`는 어느 경우에도 정상이다.
-- `provenance`가 `ESTIMATED`인 항목은 "추정치예요"를 붙인다.
+- `provenance`는 BE `Provenance` enum 의 **4값**이다: `OFFICIAL`·`DERIVED`·`USER_PROVIDED`·`ESTIMATED`.
+  가족결합 할인은 `USER_PROVIDED` 로 온다(`FamilyBundleDiscountRule`) — 통신사별 결합 할인표가
+  카탈로그에 없어 사용자가 적어 준 금액을 그대로 쓰기 때문이다.
+- **값을 열거로 묶지 않는다.** BE 가 출처를 늘릴 때마다 422 가 났고(`USER_PROVIDED` 가 실제로 그랬다 —
+  가족결합 사용자 전원의 설명이 사라졌다) BE 가 장애로 삼켜 아무도 알아채지 못했다.
+  모르는 출처는 문장을 붙이지 않고 사유의 근거로도 쓰지 않는다. 구조는 계속 엄격하게 본다.
+- 우리가 계산하지 않은 값은 밝힌다. `ESTIMATED` 는 "추정치예요", `USER_PROVIDED` 는 "적어 주신 금액이에요".
+  `ESTIMATED` 는 사유의 근거로 쓰지 않는다(확정된 할인처럼 읽힌다). `USER_PROVIDED` 는 사용자가 확인한
+  확정 금액이라 근거로 쓴다.
 - `missingInputs`가 있으면 마지막에 무엇을 더 알려주면 정확해지는지 한 문장 덧붙인다.
 - 3~5문장. 표나 목록을 만들지 않는다. 화면이 이미 보여준다.
 
