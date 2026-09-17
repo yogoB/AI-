@@ -1,6 +1,10 @@
 # Local documentation (only the root README is shared)
 *.[mM][dD]
 !/README.md
+# 계약 사본은 예외다. BE_main/docs/architecture.md §3 이 원본이고 이 파일은 사본인데,
+# 추적되지 않으면 "원본이 바뀌면 같은 날 맞춘다"는 크로스 레포 규칙이 팀에 전파되지 않는다
+# (2026-09-17 확인: 로컬에서 고쳐도 아무도 못 봤다).
+!/docs/contract.md
 
 # Environment values and credentials; keep the empty template
 .env
