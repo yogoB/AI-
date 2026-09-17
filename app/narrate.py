@@ -232,13 +232,17 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         f'“{request.carrier} {request.planName}”의 실제 내시는 금액은 월 {request.monthlyTotal:,}원이에요.',
     ]
     current, savings = request.currentMonthlyTotal, current_savings(request)
-    if savings is None:
+    if savings is None and request.monthlySavings == 0:
+        # 정가 할인이 없으면 baseline == monthlyTotal 이라 정가 문장이 같은 수를 되풀이하고,
+        # "절약되는 금액은 없어요"는 **거짓에 가깝다** — 지금 4만원대를 내는 사람에게 1만원대
+        # 조합을 찾아 주고도 그렇게 말하게 된다. 라이트 모드는 요금제를 안 받아 늘 이 경우다.
+        # 없는 것은 절감이 아니라 비교 대상이다. 화면 히어로와 같은 말을 쓴다.
+        sentences.append("정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요.")
+    elif savings is None:
         # 지금 내는 금액을 모르거나 두 수가 안 맞을 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
         sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
         if request.monthlySavings > 0:
             sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
-        elif request.monthlySavings == 0:
-            sentences.append(f"월 {request.monthlySavings:,}원 절약으로, 절약되는 금액은 없어요.")
         else:
             sentences.append(
                 f"월 {request.monthlySavings:,}원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."

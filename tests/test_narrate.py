@@ -62,7 +62,9 @@ def test_backend_cost_result_metadata_is_accepted_without_changing_message():
 
 @pytest.mark.parametrize(("savings", "sentence"), [
     (42, "월 42원 절약할 수 있어요."),
-    (0, "월 0원 절약으로, 절약되는 금액은 없어요."),
+    # 정가 할인이 없으면 baseline == monthlyTotal 이다. 같은 수를 두 번 말하지 않고,
+    # 없는 것이 절감이 아니라 비교 대상이라고 말한다.
+    (0, "정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요."),
     (-5000, "월 -5,000원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."),
 ])
 def test_savings_are_copied_without_recalculation(savings, sentence):
@@ -601,3 +603,24 @@ def test_the_total_alone_is_not_enough_to_speak_in_current_terms():
     body = narrate(request).json()
     assert "지금 내시는" not in body["message"]
     assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
+
+
+def test_no_list_price_discount_is_not_called_a_lack_of_saving():
+    """"절약되는 금액은 없어요"는 거짓에 가까웠다.
+
+    라이트 모드는 지금 쓰는 요금제를 받지 않아 **늘** 이 경우다. 지금 4만원대를 내는 사람에게
+    1만원대 조합을 찾아 주고도 "절약되는 금액은 없어요"라고 말하고 있었다.
+    없는 것은 절감이 아니라 비교 대상이다.
+    """
+    body = narrate(deepcopy(BREAKDOWN) | {"monthlySavings": 0, "baseline": 71300}).json()
+    assert "절약되는 금액은 없어요" not in body["message"]
+    assert "정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요." in body["message"]
+    # 같은 수를 두 번 말하지 않는다 — baseline 과 monthlyTotal 이 같은 값이다.
+    assert body["message"].count("71,300원") == 1
+
+
+def test_a_real_list_price_discount_is_still_stated():
+    # 정가 대비 실제 할인이 있으면 그 수를 말한다. 위 문장으로 뭉뚱그리지 않는다.
+    body = narrate(deepcopy(BREAKDOWN)).json()
+    assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
+    assert "월 17,700원 절약할 수 있어요." in body["message"]
