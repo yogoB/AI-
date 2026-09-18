@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.detections import router as detections_router
 from app.narrate import router as narrate_router
+from app.switch_timing import router as switch_timing_router
 
 
 async def require_backend(
@@ -22,7 +23,7 @@ async def require_backend(
 
 app = FastAPI(title="요고비 내레이터",
               description="백엔드가 계산한 금액을 한국어 문장으로 바꾼다. 숫자를 만들지 않는다.")
-for router in (narrate_router, detections_router):
+for router in (narrate_router, detections_router, switch_timing_router):
     app.include_router(router, dependencies=[Depends(require_backend)])
 
 
