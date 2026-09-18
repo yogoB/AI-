@@ -78,6 +78,7 @@ AI 모델·API 요청/응답에는 회원 인증 필드를 추가하지 않는�
 기존 요청도 받을 수 있도록 위 3개 필드는 선택 값이다. 설명에 새 금액이나 문구를 추가하지 않는다.
 백엔드는 설명할 `CostResult` 한 건과 상위 응답의 `missingInputs`를 합쳐 전달한다.
 공통 응답 외피(`data`, `warnings`)와 `accuracy`, `results` 목록 전체는 요청에 포함하지 않는다.
+D-51(2026-09-18): `CostResult`·`current` 에 `semiannualSavings`(×6)가 생겼고 `/me/saved-results` 가 신설됐다. **`/narrate` 요청에는 싣지 않는다** — BE 가 계약 필드만 남겨 보낸다.
 D-50(2026-09-18): BE 는 `/narrate` 를 추천 응답 시점이 아니라 **프론트가 설명을 펼칠 때**(`POST /api/v1/recommendations/narrate`) 부른다. 이 서버의 계약·동작은 그대로다 — 호출 빈도만 줄고, 장애가 나도 결과 화면은 영향을 받지 않는다.
 G-29·G-30(2026-09-17): `/recommendations` 응답에 `current`(지금 쓰는 요금제의 금액과 1순위 대비 절감액)가 생겼고,
 요청에 `optional.currentPlanId`가 생겼다. **`/narrate` 요청에는 넣지 않는다** — 설명 대상은 여전히 1순위 한 건이다.
