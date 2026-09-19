@@ -263,6 +263,20 @@ D-45 로 구독 수집이 멈춘 뒤 `CatalogDailyHarvest` 의 구독 쪽이 비
 - **호출 간격은 BE 가 지킨다.** 부르면 매번 원본을 읽는다 — 캐시도 쿨다운도 없다(무상태).
   일 단위 점검을 전제로 한 엔드포인트다. 반복 호출은 우리 UA 가 차단되는 방식으로 되갚는다.
 - 실패는 `offers` 없이 502 다. 200 이면 `offers` 가 반드시 1개 이상 있다.
+- **코드는 `detail.code` 에 있다.** 최상위 `code` 도 `error.code` 도 아니다 — FastAPI 가 `HTTPException`
+  을 `{"detail": ...}` 로 감싸기 때문이고, §7 의 `NARRATOR-AUTH-001` 401 과 같은 모양이다. 실제 본문:
+
+```jsonc
+// 502 — 페이지를 못 읽음
+{ "detail": { "code": "CATALOG-SOURCE-UNAVAILABLE",
+              "message": "공식 페이지를 읽지 못했습니다. 잠시 후 다시 실행해 주세요." } }
+// 502 — 읽었지만 한 상품의 월 정가가 유일하지 않음
+{ "detail": { "code": "CATALOG-SOURCE-CHANGED",
+              "message": "상품별 월 정가를 확인하지 못했습니다. 공식 페이지와 추출 규칙을 확인해 주세요." } }
+```
+
+  엉뚱한 자리에서 코드를 찾으면 둘이 한 코드로 뭉개진다 — `CHANGED`(사람이 봐야 함)와
+  `UNAVAILABLE`(그냥 재시도)를 가르는 것이 이 엔드포인트의 유일한 운영 신호다.
 - **`tierName` 은 카탈로그 `subscription_tier.name` 과 같은 문자열이다.** 2026-09-20 기준 11개 전부 일치한다.
   BE 는 (`serviceName`, `tierName`)으로 바로 붙이면 된다 — 매핑표가 필요 없다.
 - **BE 는 응답의 `sourceUrl` 을 자기 `subscription_service.official_url` 과 비교한다.** 다르면 제안을
