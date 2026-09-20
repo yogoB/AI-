@@ -41,7 +41,9 @@ class Promotion(BaseModel):
     planName: str = Field(min_length=1, max_length=200)
     network: Literal["SKT", "KT", "LGU+"]
     promoMonths: int = Field(ge=1, le=60)
-    # 특가 종료 후 월 요금. 페이지가 "N개월 이후 B원/월"이라고 적은 값 그대로다.
+    # N개월 이후의 월 요금. 페이지가 "N개월 이후 B원/월"이라고 적은 값 그대로다.
+    # **"정가"가 아니고 오른다는 뜻도 아니다** — 13건 중 5건은 이 값이 지금 금액보다 싸다
+    # (장기할인·약정형). 이 값을 쓰는 문구는 방향을 단정하면 안 된다.
     # 앞의 "월 A원"은 싣지 않는다 — 어떤 값인지 페이지가 말하지 않는다.
     # 상품명이 "12개월간 990원 특가"인데 A가 31,900원이라 특가액도 정가도 아니다. 모르면 안 옮긴다.
     regularPrice: int = Field(gt=0)
@@ -80,7 +82,7 @@ def extract_promotion(product_id: int, html: str) -> Promotion:
             match = candidate
             break
     if match is None:
-        raise ValueError("상품 머리말에서 특가 기간과 종료 후 요금을 찾지 못했습니다.")
+        raise ValueError("상품 머리말에서 기간과 이후 월 요금을 찾지 못했습니다.")
 
     head = text[: match.start()]
     head = head[head.rindex(HEADER) + len(HEADER):].strip()
