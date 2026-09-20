@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.detections import router as detections_router
 from app.narrate import router as narrate_router
 from app.switch_timing import router as switch_timing_router
+from app.plan_promotions import router as plan_promotions_router
 from app.subscription_check import router as subscription_check_router
 
 
@@ -23,8 +24,9 @@ async def require_backend(
 
 
 app = FastAPI(title="요고비 운영 자동화 · 내레이터",
-              description="규칙 기반 설명과 공식 구독 가격 확인. 계산·승인·저장은 백엔드가 담당한다.")
-for router in (narrate_router, detections_router, switch_timing_router, subscription_check_router):
+              description="규칙 기반 설명과 공식 출처 가격 확인. 계산·승인·저장은 백엔드가 담당한다.")
+for router in (narrate_router, detections_router, switch_timing_router,
+               subscription_check_router, plan_promotions_router):
     app.include_router(router, dependencies=[Depends(require_backend)])
 
 

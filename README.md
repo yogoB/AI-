@@ -15,10 +15,11 @@ Python 3.12 · FastAPI. **백엔드가 계산한 금액을 한국어 문장으�
 | `POST /narrate/detections` | 중복 결제 탐지 결과 → 사람 문장 (D-46) | D-46 절 |
 | `POST /narrate/switch-timing` | 변경 시점 → 사람 문장 | §3 |
 | `POST /operations/subscriptions/check` | 구독 공식 페이지의 월 정가 + 원문 근거 (D-60) | §8 |
+| `POST /operations/plans/promotions/check` | 알뜰폰 기간 한정 특가 + 원문 근거 | §9 |
 | `GET /health` | `200 {"status": "ok"}` · 토큰 없이 공개 | — |
 
 앞의 셋은 **설명**이다. BE 가 준 숫자를 문장으로 옮길 뿐 새 숫자를 만들지 않는다.
-마지막 하나는 **운영 조회**다. 등록된 공식 페이지를 읽어 원문 그대로 인용하며,
+뒤의 둘은 **운영 조회**다. 등록된 공식 페이지를 읽어 원문 그대로 인용하며,
 대조·변경 제안·승인·저장은 전부 BE 가 한다. 여기서도 금액을 만들지 않는 것은 같다.
 
 ## 흐름
@@ -28,8 +29,8 @@ flowchart LR
     U["사용자: '설명 보기'"] -->|"POST /api/v1/recommendations/narrate"| B["BE_main"]
     B -->|"POST /narrate<br/>flycast 사설망"| N["내레이터"]
     N -->|"message · reasons · notices"| B
-    H["BE 일일 수집 배치<br/>09:00 KST"] -->|"POST /operations/subscriptions/check"| N
-    N -->|"월 정가 + 원문 근거"| H
+    H["BE 일일 수집 배치<br/>09:00 KST"] -->|"POST /operations/**"| N
+    N -->|"월 정가 · 특가 + 원문 근거"| H
 
     classDef ours fill:#dbeafe,stroke:#1d4ed8
     class B,N,H ours
@@ -47,12 +48,13 @@ app/
 ├── narrate.py              설명 문장 · 규칙 기반 사유 · 금액 가드 (274줄)
 ├── detections.py           중복 결제 설명 (84줄)
 ├── switch_timing.py        변경 시점 설명 (78줄)
-└── subscription_check.py   구독 공식가 조회 (125줄)
+├── subscription_check.py   구독 공식가 조회 (125줄)
+└── plan_promotions.py      알뜰폰 특가 조회 (132줄)
 ```
 
-테스트 **99개 통과 · 1개 건너뜀**(`tests/test_narrate.py` 73 · `tests/test_switch_timing.py` 11 ·
-`tests/test_detections.py` 7 · `tests/test_subscription_check.py` 4 · 그 외 5).
-외부를 부르는 테스트는 없다 — 구독 조회도 고정 HTML 과 `httpx.MockTransport` 로만 돈다.
+테스트 **104개 통과 · 1개 건너뜀**(`tests/test_narrate.py` 73 · `tests/test_switch_timing.py` 11 ·
+`tests/test_detections.py` 7 · `tests/test_subscription_check.py` 4 · `tests/test_plan_promotions.py` 5 · 그 외 5).
+외부를 부르는 테스트는 없다 — 공식 출처 조회도 고정 HTML 과 `httpx.MockTransport` 로만 돈다.
 
 ## 실행
 
