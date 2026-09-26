@@ -1,3 +1,5 @@
+import re
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -27,9 +29,20 @@ def test_only_regular_monthly_prices_from_the_right_region_are_extracted():
         check.extract_offers('iCloud+', ICLOUD.replace('대한민국(원)', '다른나라(원)'))
 
 
+def test_a_label_never_borrows_the_next_cards_price():
+    # 크레마클럽 X FLO 99 카드의 가격이 사라지면 뒤 카드 가격을 집지 말고 실패해야 한다.
+    card = '<p>{}요금제 월 {}원 eBook 무제한</p>'
+    page = ''.join(card.format(n, p) for n, p in (('스탠다드 55', '5,500'), ('프리미엄 77', '7,700'), ('크레마클럽 X FLO 99', '9,900')))
+    assert [o.price for o in check.extract_offers('크레마클럽', page)] == [5500, 7700, 9900]
+    with pytest.raises(ValueError):
+        check.extract_offers('크레마클럽', page.replace('월 9,900원', ''))
+    bugs = '<p>모바일 무제한 듣기 알뜰하게 모바일 기기에서만 재생 30일 7,590원</p><p>자동결제 8,690원</p>'
+    assert not re.search(check.SOURCES['벅스'][2]['모바일 무제한 듣기'], bugs)
+
+
 def test_endpoint_is_internal_and_returns_source_evidence_without_saving(monkeypatch):
     async def fetch(url):
-        assert url == check.SOURCES['Apple Music']
+        assert url == check.SOURCES['Apple Music'][0]
         return APPLE.encode()
     monkeypatch.setattr(check, 'fetch_page', fetch)
     with TestClient(app) as client:
@@ -63,4 +76,4 @@ def test_fetch_rejects_redirect_non_html_and_oversized_pages(monkeypatch):
         transport = httpx.MockTransport(lambda request: response)
         monkeypatch.setattr(check.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
         with pytest.raises((httpx.HTTPError, ValueError)):
-            asyncio.run(check.fetch_page(check.SOURCES['Apple Music']))
+            asyncio.run(check.fetch_page(check.SOURCES['Apple Music'][0]))
