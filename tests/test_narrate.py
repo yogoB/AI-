@@ -65,7 +65,7 @@ def test_backend_cost_result_metadata_is_accepted_without_changing_message():
     # 정가 할인이 없으면 baseline == monthlyTotal 이다. 같은 수를 두 번 말하지 않고,
     # 없는 것이 절감이 아니라 비교 대상이라고 말한다.
     (0, "정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요."),
-    (-5000, "월 -5,000원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."),
+    (-5000, "정가보다 월 5,000원 더 내는 조합이에요."),
 ])
 def test_savings_are_copied_without_recalculation(savings, sentence):
     request = {**BREAKDOWN, "monthlySavings": savings, "missingInputs": []}
@@ -303,7 +303,9 @@ def test_a_new_missing_input_field_does_not_take_down_the_whole_explanation():
     assert response.json()["reasons"] == RULE_REASONS
     message = response.json()["message"]
     # 아는 값만 문장에 넣는다. 모르는 값은 조용히 빠진다 — 없는 이름을 지어내지 않는다.
-    assert "추가로 가입 자격, 가족 결합 여부 정보를 알려주시면 더 정확해져요." in message
+    # 가입 자격은 입력칸이 없는 **사실 통보**라 되묻지 않는다(BE G-77). 요청인 것만 남는다.
+    assert "추가로 가족 결합 여부 정보를 알려주시면 더 정확해져요." in message
+    assert "가입 자격" not in message
     assert "notInventedYet" not in message
 
 
@@ -487,7 +489,8 @@ def test_an_informational_notice_is_not_turned_into_a_question():
         {"field": "networkType", "impact": "망 종류를 지정하면 후보를 더 정확히 좁혀요"},
     ]}
     body = narrate(request).json()
-    assert "추가로 현재 망 종류 정보를 알려주시면 더 정확해져요." in body["message"]
+    # 망 종류도 이제 통보뿐이다(BE G-75 c) — 좁히면 손해라는 안내와 모순되게 되묻지 않는다.
+    assert "추가로" not in body["message"]
     assert "가족결합" not in body["message"]
     # 빠지는 것은 문장뿐이다 — 안내는 두 줄 그대로 화면에 간다.
     assert len(body["notices"]) == 2
@@ -624,3 +627,39 @@ def test_a_real_list_price_discount_is_still_stated():
     body = narrate(deepcopy(BREAKDOWN)).json()
     assert "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요." in body["message"]
     assert "월 17,700원 절약할 수 있어요." in body["message"]
+
+
+def test_fact_notices_are_never_asked_back():
+    """BE 가 **사실로만** 보내는 네 필드는 "알려주시면"으로 되묻지 않는다(2026-09-27).
+    망은 이미 골랐고, 가입 자격은 입력칸이 없고, 데이터는 필수 입력이다 — 되물으면 지킬 수 없는 약속이다."""
+    request = deepcopy(BREAKDOWN) | {"missingInputs": [
+        {"field": "networkType", "impact": "통신망을 5G 로 좁혀서 요금제 3건을 뺐어요"},
+        {"field": "ageLimit", "impact": "가입 자격이 필요한 요금제 8건은 뺐어요"},
+        {"field": "wantedServiceIds", "impact": "고르신 서비스 1개는 아직 금액을 몰라 계산에서 뺐어요"},
+        {"field": "monthlyDataGb", "impact": "지금 요금제는 데이터 무제한인데 20GB 기준으로 찾았어요"},
+    ]}
+    body = narrate(request).json()
+    assert "추가로" not in body["message"]
+    assert len(body["notices"]) == 4
+
+
+def test_a_negative_list_price_saving_is_not_written_as_minus():
+    body = narrate(deepcopy(BREAKDOWN) | {"monthlySavings": -500, "baseline": 70800}).json()
+    assert "월 -" not in body["message"]
+    assert "정가보다 월 500원 더 내는 조합이에요" in body["message"]
+
+
+def test_does_not_ask_for_the_current_plan_it_already_has():
+    """두 수가 안 맞아 정가 기준으로 물러나도, 지금 요금제는 이미 받았다 — 다시 달라고 하지 않는다."""
+    request = deepcopy(BREAKDOWN) | {"monthlySavings": 0, "baseline": 71300,
+                                     "currentMonthlyTotal": 90000, "currentMonthlySavings": 1}
+    assert "지금 쓰는 요금제를 알려주시면" not in narrate(request).json()["message"]
+
+
+def test_notice_length_is_counted_like_the_backend():
+    """BE 는 UTF-16 으로 센다. 이모지 한 글자가 2 다 — 파이썬 len 으로 300 이하여도 BE 에서 넘치면
+    BE 가 **설명 전체**를 버린다. 넘는 줄은 여기서 먼저 뺀다."""
+    request = deepcopy(BREAKDOWN) | {"missingInputs": [
+        {"field": "hasFamilyBundle", "impact": "가" * 290 + "🎉" * 10}]}
+    assert narrate(request).json()["notices"] == []
+

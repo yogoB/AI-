@@ -10,7 +10,7 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 router = APIRouter()
 Text = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
@@ -34,6 +34,13 @@ class SwitchTimingRequest(BaseModel):
     switchingCost: int = Field(ge=0)
     # 사용자가 적은 약정 만료일. `YYYY-MM-DD`. 모르면 없다.
     expiryDate: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    @model_validator(mode="after")
+    def payback_needed_unless_no_benefit(self) -> "SwitchTimingRequest":
+        # 계약 밖 조합이면 "None개월이면 회수해요" 같은 문장을 만드느니 422 다.
+        if self.status != "NO_BENEFIT" and self.paybackMonths is None:
+            raise ValueError("paybackMonths 는 NO_BENEFIT 이 아니면 필요하다")
+        return self
 
     @field_validator("expiryDate")
     @classmethod
@@ -67,7 +74,8 @@ def note_for(request: SwitchTimingRequest) -> str:
                 "그 날에 맞춰 일정을 잡았어요.")
 
     if request.switchingCost == 0:
-        return "전환비용이 없어 지금 옮기는 게 바로 이득이에요. 오늘 기준으로 일정을 잡았어요."
+        # BE 는 전환비용을 **모르면** 0 을 보낸다(화면이 묻지 않는다). 없다고 단정하지 않는다.
+        return "위약금·할부금이 없다면 지금 옮기는 게 바로 이득이에요. 오늘 기준으로 일정을 잡았어요."
     payback = "바로" if request.paybackMonths == 0 else f"{request.paybackMonths}개월이면"
     return (f"지금 옮기는 게 이득이에요. 전환비용 {request.switchingCost:,}원을 {payback} 회수해요"
             f"(약정 잔여 {request.remainingContractMonths}개월).")

@@ -23,8 +23,10 @@ async def require_backend(
                             headers={"WWW-Authenticate": "Bearer"})
 
 
+# 문서 경로(/docs·/openapi.json)는 토큰 없이 열렸다. 쓰는 사람이 없고 계약 원본은 docs/contract.md 다.
 app = FastAPI(title="요고비 운영 자동화 · 내레이터",
-              description="규칙 기반 설명과 공식 출처 가격 확인. 계산·승인·저장은 백엔드가 담당한다.")
+              description="규칙 기반 설명과 공식 출처 가격 확인. 계산·승인·저장은 백엔드가 담당한다.",
+              docs_url=None, redoc_url=None, openapi_url=None)
 for router in (narrate_router, detections_router, switch_timing_router,
                subscription_check_router, plan_promotions_router):
     app.include_router(router, dependencies=[Depends(require_backend)])

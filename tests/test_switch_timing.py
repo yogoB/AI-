@@ -24,7 +24,8 @@ def test_switching_now_states_the_cost_and_how_long_to_recover_it():
 def test_no_switching_cost_says_so_instead_of_zero_months():
     """"0개월이면 회수해요"는 읽히지 않는다. 비용이 없으면 없다고 말한다."""
     note = explain(switchingCost=0, paybackMonths=0).json()["note"]
-    assert "전환비용이 없어 지금 옮기는 게 바로 이득이에요" in note
+    # BE 는 전환비용을 **모르면** 0 을 보낸다 — 없다고 단정하지 않는다(2026-09-27).
+    assert "위약금·할부금이 없다면 지금 옮기는 게 바로 이득이에요" in note
     assert "0개월" not in note
 
 
@@ -61,3 +62,8 @@ def test_a_value_backend_would_never_send_is_rejected(bad):
 def test_the_endpoint_needs_the_backend_token():
     with TestClient(app) as api:
         assert api.post("/narrate/switch-timing", json=BASE).status_code == 401
+
+
+def test_switch_now_without_payback_months_is_rejected():
+    """계약 밖 조합("None개월이면 회수해요")은 문장을 만들지 않고 422 다."""
+    assert explain(paybackMonths=None).status_code == 422

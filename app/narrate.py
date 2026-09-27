@@ -33,15 +33,21 @@ Notice = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[^\r\n]+$
 # ②를 여기 넣으면 이미 답한 것을 다시 묻는 문장이 나간다 — 화면의 안내와 정면으로 어긋난다.
 # 그래서 **모르는 값은 이 문장에서 조용히 빠지는 것이 맞다.** 안내 원문은 `notices` 가 그대로 나른다.
 # 새 필드를 추가할 때는 BE 의 `impact` 문구를 읽고 ①인지 확인한 뒤에만 적는다.
+#
+# 2026-09-27: BE 가 networkType·ageLimit·wantedServiceIds·monthlyDataGb 를 **사실 통보로만** 보낸다
+# (BE G-75·G-77). 되물으면 망은 이미 골랐고, 가입 자격은 입력칸이 없고, 데이터는 필수 입력이라
+# 지킬 수 없는 약속이 된다. 요청으로 오는 셋만 남긴다.
 FIELD_LABELS = {
-    "monthlyDataGb": "월 데이터 사용량",
-    "wantedServiceIds": "이용하고 싶은 구독 서비스",
     "currentCarrier": "현재 통신사",
-    "networkType": "현재 망 종류",
     "contractType": "약정 유형",
     "hasFamilyBundle": "가족 결합 여부",
-    "ageLimit": "가입 자격",
 }
+
+
+def backend_length(text: str) -> int:
+    """BE(Java) 가 세는 글자 수 — UTF-16 코드 단위. 이모지 한 글자가 2 다.
+    파이썬 len 으로 세면 BE 상한을 넘는 줄이 나가고, BE 는 그 응답의 **설명 전체**를 버린다."""
+    return len(text.encode("utf-16-le")) // 2
 
 
 class BreakdownItem(BaseModel):
@@ -197,7 +203,7 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
     # 나가기 전 마지막 관문: BE가 준 금액 외의 금액이 섞인 줄은 버린다.
     known = known_numbers(request)
     return [reason for reason in candidates
-            if len(reason) <= 80 and quotes_known_amounts_only(reason, known)][:3]
+            if backend_length(reason) <= 80 and quotes_known_amounts_only(reason, known)][:3]
 
 
 def notices_for(request: "NarrateRequest") -> list[str]:
@@ -222,7 +228,7 @@ def notices_for(request: "NarrateRequest") -> list[str]:
     # 300·10 은 BE `NarratorClient.lines(notices, 10, 300)` 와 같은 값이다.
     # 하나라도 넘으면 BE 가 설명 전체를 폐기하므로 여기서 먼저 맞춘다.
     # 넘는 줄은 자르지 않고 통째로 뺀다 — 잘린 안내는 오해를 만든다.
-    return [line for line in lines if len(line) <= 300][:10]
+    return [line for line in lines if backend_length(line) <= 300][:10]
 
 
 @router.post("/narrate", response_model=NarrateResponse)
@@ -237,16 +243,17 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         # "절약되는 금액은 없어요"는 **거짓에 가깝다** — 지금 4만원대를 내는 사람에게 1만원대
         # 조합을 찾아 주고도 그렇게 말하게 된다. 라이트 모드는 요금제를 안 받아 늘 이 경우다.
         # 없는 것은 절감이 아니라 비교 대상이다. 화면 히어로와 같은 말을 쓴다.
-        sentences.append("정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요.")
+        # 지금 요금제를 이미 받았으면(두 수가 안 맞아 물러난 경우) 다시 달라고 하지 않는다.
+        sentences.append("정가 기준 금액이에요." if current is not None
+                         else "정가 기준 금액이에요. 지금 쓰는 요금제를 알려주시면 얼마나 아끼는지 계산해요.")
     elif savings is None:
         # 지금 내는 금액을 모르거나 두 수가 안 맞을 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
         sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
         if request.monthlySavings > 0:
             sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
         else:
-            sentences.append(
-                f"월 {request.monthlySavings:,}원 절약으로 표시되는 결과라, 비교 기준보다 더 내는 조합이에요."
-            )
+            # "월 -500원 절약" 은 읽히지 않는다 — 더 내는 것은 더 낸다고 말한다.
+            sentences.append(f"정가보다 월 {abs(request.monthlySavings):,}원 더 내는 조합이에요.")
     else:
         # 지금 내는 금액을 알면 그것이 기준이다. 사용자가 궁금한 것은 정가가 아니라 자기 요금이다.
         if savings > 0:

@@ -23,6 +23,8 @@ router = APIRouter()
 SOURCE_TEMPLATE = "https://www.mvnohub.kr/product/products/{}.do"
 NETWORKS = ("LGU+", "SKT", "KT")          # 긴 것부터 — "SKT"가 "KT"에 먹히지 않게
 REQUEST_GAP_SECONDS = 1.2                 # 한 번의 호출이 여러 장을 읽는다. 간격은 여기서 지킨다.
+# BE PlanPromotionOracle 의 읽기 타임아웃(90초)보다 짧게 — 읽은 만큼은 BE 에 닿게 한다.
+DEADLINE_SECONDS = 75
 HEADER = "알뜰폰 허브 소개 "
 HEADER_SPAN = 200   # 머리말과 가격 줄 사이 최대 거리. 이보다 멀면 다른 상품 이야기다.
 # "월 19,800 원 6개월 이후 13,200 원/월" — 뒤의 값만 쓴다(아래 주석 참고).
@@ -118,7 +120,13 @@ async def check_promotions(request: PromotionsRequest) -> PromotionsResponse:
     promotions: list[Promotion] = []
     failures: list[Failure] = []
 
+    # 전체 기한. 페이지마다 15초 + 간격이면 30개가 8분인데 BE 는 90초에 포기하고 **이미 읽은 것까지 잃는다.**
+    # 넘으면 남은 번호는 읽지 않고 UNAVAILABLE 로 돌려준다 — 못 읽은 것이지 특가가 끝난 것이 아니다.
+    started = asyncio.get_running_loop().time()
     for index, product_id in enumerate(dict.fromkeys(request.productIds)):
+        if asyncio.get_running_loop().time() - started >= DEADLINE_SECONDS:
+            failures.append(Failure(productId=product_id, code="CATALOG-SOURCE-UNAVAILABLE"))
+            continue
         if index:
             await asyncio.sleep(REQUEST_GAP_SECONDS)
         try:

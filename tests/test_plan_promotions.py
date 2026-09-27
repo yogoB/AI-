@@ -84,3 +84,24 @@ def test_url_is_never_taken_from_the_request():
                      {"productIds": [7752], "url": "http://127.0.0.1"}):
             assert client.post("/operations/plans/promotions/check",
                                json=body, headers=AUTH).status_code == 422
+
+
+def test_a_total_deadline_returns_what_is_left_as_unavailable(monkeypatch):
+    """페이지마다 15초 + 간격이면 30개가 8분이다. BE 는 90초에 포기하고 **이미 읽은 것까지 잃는다.**
+    전체 기한을 넘으면 남은 번호는 읽지 않고 UNAVAILABLE 로 돌려준다."""
+    calls = []
+
+    async def fetch(url):
+        calls.append(url)
+        return PAGE.encode()
+
+    monkeypatch.setattr(promo, "fetch_page", fetch)
+    monkeypatch.setattr(promo, "REQUEST_GAP_SECONDS", 0)
+    monkeypatch.setattr(promo, "DEADLINE_SECONDS", 0)
+    with TestClient(app) as client:
+        payload = client.post("/operations/plans/promotions/check",
+                              json={"productIds": [7752, 7179]}, headers=AUTH).json()
+    assert calls == []
+    assert payload["failures"] == [{"productId": 7752, "code": "CATALOG-SOURCE-UNAVAILABLE"},
+                                   {"productId": 7179, "code": "CATALOG-SOURCE-UNAVAILABLE"}]
+
