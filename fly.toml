@@ -17,7 +17,7 @@ primary_region = "nrt"
   auto_start_machines = true
   min_machines_running = 0
 
-  # /health 는 내부 토큰 없이 200 을 준다. 모델 키도 필요 없다.
+  # /health 는 인증 없이 부른다. 서버 토큰이 설정돼 있지 않으면 503 이라 그런 배포는 여기서 실패한다.
   [[http_service.checks]]
     grace_period = "10s"
     interval = "15s"
