@@ -159,8 +159,11 @@ def extract_offers(service: ServiceName, html: str) -> list[Offer]:
     return offers
 
 
+PAGE_TIMEOUT_SECONDS = 15
+
+
 async def fetch_page(url: str) -> bytes:
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(PAGE_TIMEOUT_SECONDS):
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as client:
             async with client.stream("GET", url, headers={"Accept-Language": "ko-KR", "User-Agent": "Yogobi-Catalog-Check/1.0"}) as response:
                 response.raise_for_status()

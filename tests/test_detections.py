@@ -56,3 +56,14 @@ def test_a_negative_amount_is_rejected_rather_than_shown():
 def test_the_endpoint_needs_the_backend_token():
     with TestClient(app) as api:
         assert api.post("/narrate/detections", json={"findings": []}).status_code == 401
+
+
+def test_a_target_name_longer_than_the_backend_counts_is_rejected_here():
+    """BE 는 UTF-16 으로 200자를 센다. 이모지 101개는 파이썬 101자지만 BE 에선 202자라
+    **설명 전체가 버려진다.** 여기서 먼저 422 로 막아 BE 가 제 문구로 물러나게 한다."""
+    assert explain([FINDING | {"targetName": "🎬" * 101}]).status_code == 422
+
+
+def test_tier_duplicate_says_what_goes_away():
+    line = explain([FINDING | {"rule": "TIER_DUPLICATE"}]).json()["lines"][0]
+    assert line["how"] == "더 비싼 등급 하나만 남기면 싼 등급 결제만큼 줄어요."

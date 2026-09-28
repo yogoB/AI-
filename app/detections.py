@@ -11,10 +11,23 @@
 from typing import Annotated
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+from app.narrate import backend_length
 
 router = APIRouter()
-Text = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
+
+
+def fits_backend(value: str) -> str:
+    # BE `text(..., 200)` 는 UTF-16 으로 센다. 이모지는 2칸이라 파이썬 200자가 BE 에선 넘칠 수 있고,
+    # 넘치면 BE 가 설명 전체를 버린다. 여기서 422 로 막으면 BE 는 제 문구로 물러난다.
+    if backend_length(value) > 200:
+        raise ValueError("200자(UTF-16)를 넘는다")
+    return value
+
+
+Text = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$"),
+                 AfterValidator(fits_backend)]
 
 # BE `DetectionRule` 의 값. 제목은 "무엇이 일어나고 있나", how 는 "그래서 무엇을 하면 되나"다.
 # 해지·변경은 사용자가 각 서비스에서 직접 한다 — 우리는 금액만 알려준다.
@@ -25,7 +38,7 @@ RULES = {
     ),
     "TIER_DUPLICATE": (
         "같은 서비스를 두 등급으로 결제 중",
-        "더 비싼 등급 하나만 남기면 나머지가 줄어요.",
+        "더 비싼 등급 하나만 남기면 싼 등급 결제만큼 줄어요.",
     ),
     "BUNDLE_OVERLAP": (
         "묶음 상품이 더 싼 조합",

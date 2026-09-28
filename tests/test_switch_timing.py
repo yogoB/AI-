@@ -31,8 +31,8 @@ def test_no_switching_cost_says_so_instead_of_zero_months():
 
 def test_waiting_names_the_expiry_day_when_the_user_gave_one():
     note = explain(status="WAIT_UNTIL_EXPIRY", remainingContractMonths=8,
-                   expiryDate="2026-12-03").json()["note"]
-    assert "약정 만료일 2026년 12월 3일까지 기다리는 게 이득이에요." in note
+                   expiryDate="2099-12-03").json()["note"]
+    assert "약정 만료일 2099년 12월 3일까지 기다리는 게 이득이에요." in note
 
 
 def test_waiting_without_a_date_falls_back_to_the_remaining_months():
@@ -67,3 +67,17 @@ def test_the_endpoint_needs_the_backend_token():
 def test_switch_now_without_payback_months_is_rejected():
     """계약 밖 조합("None개월이면 회수해요")은 문장을 만들지 않고 422 다."""
     assert explain(paybackMonths=None).status_code == 422
+
+
+def test_a_past_expiry_date_is_not_offered_as_something_to_wait_for():
+    """BE 는 날짜 형식만 본다. 이미 지난 날까지 "기다리라"고 하면 따를 수 없는 안내다."""
+    note = explain(status="WAIT_UNTIL_EXPIRY", remainingContractMonths=6,
+                   expiryDate="2025-01-31").json()["note"]
+    assert "2025년" not in note
+    assert "약정이 6개월 남아" in note
+
+
+def test_switch_now_after_the_contract_ended_does_not_show_zero_months_left():
+    note = explain(switchingCost=200000, paybackMonths=40, remainingContractMonths=0).json()["note"]
+    assert "약정 잔여 0개월" not in note
+    assert "전환비용 200,000원을 40개월이면 회수해요." in note

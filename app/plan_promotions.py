@@ -16,7 +16,7 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.subscription_check import PageText, fetch_page
+from app.subscription_check import PAGE_TIMEOUT_SECONDS, PageText, fetch_page
 
 router = APIRouter()
 
@@ -124,11 +124,13 @@ async def check_promotions(request: PromotionsRequest) -> PromotionsResponse:
     # 넘으면 남은 번호는 읽지 않고 UNAVAILABLE 로 돌려준다 — 못 읽은 것이지 특가가 끝난 것이 아니다.
     started = asyncio.get_running_loop().time()
     for index, product_id in enumerate(dict.fromkeys(request.productIds)):
-        if asyncio.get_running_loop().time() - started >= DEADLINE_SECONDS:
-            failures.append(Failure(productId=product_id, code="CATALOG-SOURCE-UNAVAILABLE"))
-            continue
         if index:
             await asyncio.sleep(REQUEST_GAP_SECONDS)
+        # 간격을 쉰 뒤에, 한 장이 통째로(최대 15초) 기한 안에 들어갈 때만 시작한다.
+        # 검사를 간격 앞에서 하면 74.9초에 통과한 호출이 91초에 끝나 BE(90초)가 먼저 포기한다.
+        if asyncio.get_running_loop().time() - started + PAGE_TIMEOUT_SECONDS > DEADLINE_SECONDS:
+            failures.append(Failure(productId=product_id, code="CATALOG-SOURCE-UNAVAILABLE"))
+            continue
         try:
             body = await fetch_page(SOURCE_TEMPLATE.format(product_id))
         except (httpx.HTTPError, TimeoutError, ValueError):

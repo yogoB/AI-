@@ -105,3 +105,22 @@ def test_a_total_deadline_returns_what_is_left_as_unavailable(monkeypatch):
     assert payload["failures"] == [{"productId": 7752, "code": "CATALOG-SOURCE-UNAVAILABLE"},
                                    {"productId": 7179, "code": "CATALOG-SOURCE-UNAVAILABLE"}]
 
+
+
+def test_a_page_is_not_started_unless_its_whole_timeout_fits_the_deadline(monkeypatch):
+    """기한 검사 뒤 간격 1.2초 + 한 장 15초가 붙으면 74.9초에 통과한 호출이 91초에 끝난다 —
+    BE 는 90초에 포기한다. 한 장이 통째로 들어갈 때만 시작한다."""
+    calls = []
+
+    async def fetch(url):
+        calls.append(url)
+        return PAGE.encode()
+
+    monkeypatch.setattr(promo, "fetch_page", fetch)
+    monkeypatch.setattr(promo, "REQUEST_GAP_SECONDS", 0)
+    monkeypatch.setattr(promo, "DEADLINE_SECONDS", promo.PAGE_TIMEOUT_SECONDS - 1)
+    with TestClient(app) as client:
+        payload = client.post("/operations/plans/promotions/check",
+                              json={"productIds": [7752]}, headers=AUTH).json()
+    assert calls == []
+    assert payload["failures"] == [{"productId": 7752, "code": "CATALOG-SOURCE-UNAVAILABLE"}]

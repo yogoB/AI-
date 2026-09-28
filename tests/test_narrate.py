@@ -92,7 +92,7 @@ def test_all_estimated_items_and_missing_inputs_are_explained():
         response = api.post("/narrate", json=request)
     assert response.status_code == 200
     message = response.json()["message"]
-    assert "“가족 결합 할인”(-5,000원), “부가서비스”(2,500원) 항목은 추정치예요." in message
+    assert "“가족 결합 할인”(5,000원 할인), “부가서비스”(2,500원) 항목은 추정치예요." in message
     assert message.endswith("추가로 가족 결합 여부, 약정 유형 정보를 알려주시면 더 정확해져요.")
     assert message.count(".") == 5
     assert "\n" not in message
@@ -434,7 +434,8 @@ def test_a_user_provided_amount_does_not_take_down_the_explanation():
     assert response.status_code == 200
     body = response.json()
     # 우리가 계산한 값이 아니라는 것을 밝힌다. 추정치와는 다른 문장이다.
-    assert '“가족결합 할인”(-5,000원) 항목은 적어 주신 금액이에요.' in body["message"]
+    # 부호는 사용자가 적은 적 없는 표기다 — 5,000원을 적었지 -5,000원을 적지 않았다.
+    assert '“가족결합 할인”(5,000원 할인) 항목은 적어 주신 금액이에요.' in body["message"]
     # 사용자가 적어 준 확정 금액이라 사유의 근거로 쓸 수 있다. 추정치와 다른 점이다.
     assert '“가족결합 할인”으로 월 5,000원이 빠져요.' in body["reasons"]
 

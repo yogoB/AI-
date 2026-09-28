@@ -267,7 +267,9 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
 
     # 우리가 계산하지 않은 값은 그렇다고 밝힌다. 출처가 여럿이면 각각 한 문장이다.
     for source, note in SOURCE_NOTES.items():
-        labelled = [f'“{item.label}”({item.amount:,}원)'
+        # 할인은 음수로 오지만 사용자는 "-11,000원"을 적지 않았다. 부호 대신 말로 적는다(표기만 바꾼다).
+        labelled = [f'“{item.label}”({abs(item.amount):,}원 할인)' if item.amount < 0
+                    else f'“{item.label}”({item.amount:,}원)'
                     for item in request.breakdown if item.provenance == source]
         if labelled:
             sentences.append(f"{', '.join(labelled)} 항목은 {note}.")

@@ -7,6 +7,7 @@
 없으면 그 문장을 빼는 쪽을 택한다 — 날짜 없이 "만료일까지 기다리세요"는 언제까지인지 알려주지 못한다.
 """
 
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter
@@ -46,7 +47,6 @@ class SwitchTimingRequest(BaseModel):
     @classmethod
     def validate_day(cls, value: str | None) -> str | None:
         if value is not None:
-            from datetime import date
             date.fromisoformat(value)   # 2026-02-31 같은 값을 여기서 막는다
         return value
 
@@ -54,6 +54,11 @@ class SwitchTimingRequest(BaseModel):
 class SwitchTimingResponse(BaseModel):
     headline: Text
     note: str = Field(max_length=300)
+
+
+def today_in_korea() -> date:
+    # 머신 시계는 UTC 다. 한국 자정~09시에는 UTC 날짜가 하루 늦다. tzdata 없이 고정 +9.
+    return datetime.now(timezone(timedelta(hours=9))).date()
 
 
 def korean_day(value: str) -> str:
@@ -66,19 +71,21 @@ def note_for(request: SwitchTimingRequest) -> str:
         return "지금 조건에서는 옮겨도 절감이 없어요. 아래 일정은 참고용이에요."
 
     if request.status == "WAIT_UNTIL_EXPIRY":
-        if not request.expiryDate:
+        # BE 는 날짜 형식만 본다. 이미 지난 날까지 기다리라고 하면 따를 수 없으니 남은 개월로 말한다.
+        if not request.expiryDate or date.fromisoformat(request.expiryDate) <= today_in_korea():
             # 날짜를 모르면 "언제까지"를 말할 수 없다. 남은 개월로 대신한다.
             return (f"약정이 {request.remainingContractMonths}개월 남아 지금 옮기면 손해예요. "
                     "만료 후에 옮기는 게 이득이에요.")
         return (f"약정 만료일 {korean_day(request.expiryDate)}까지 기다리는 게 이득이에요. "
-                "그 날에 맞춰 일정을 잡았어요.")
+                "그날에 맞춰 일정을 잡았어요.")
 
     if request.switchingCost == 0:
         # BE 는 전환비용을 **모르면** 0 을 보낸다(화면이 묻지 않는다). 없다고 단정하지 않는다.
         return "위약금·할부금이 없다면 지금 옮기는 게 바로 이득이에요. 오늘 기준으로 일정을 잡았어요."
     payback = "바로" if request.paybackMonths == 0 else f"{request.paybackMonths}개월이면"
-    return (f"지금 옮기는 게 이득이에요. 전환비용 {request.switchingCost:,}원을 {payback} 회수해요"
-            f"(약정 잔여 {request.remainingContractMonths}개월).")
+    remaining = (f"(약정 잔여 {request.remainingContractMonths}개월)"
+                 if request.remainingContractMonths > 0 else "")
+    return f"지금 옮기는 게 이득이에요. 전환비용 {request.switchingCost:,}원을 {payback} 회수해요{remaining}."
 
 
 @router.post("/narrate/switch-timing", response_model=SwitchTimingResponse)
