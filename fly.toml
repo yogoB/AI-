@@ -15,7 +15,8 @@ primary_region = "nrt"
   force_https = false
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 0
+  # 첫 호출 기동이 4초 — BE 읽기 한도 5초에 가까워 설명이 빠질 수 있다. 1대는 늘 켜 둔다.
+  min_machines_running = 1
 
   # /health 는 내부 토큰 없이 200 을 준다. 모델 키도 필요 없다.
   [[http_service.checks]]
