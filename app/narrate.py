@@ -89,7 +89,8 @@ class NarrateRequest(BaseModel):
     planId: int | None = Field(default=None, ge=1)
     planName: Label
     carrier: Label
-    breakdown: list[BreakdownItem] = Field(max_length=100)
+    # BE 는 등급 200개까지 받는다(MAX_IDS). 100 이면 그 사이에서 422 → 설명이 통째로 빠졌다.
+    breakdown: list[BreakdownItem] = Field(max_length=300)
     missingInputs: list[MissingInput] = Field(default_factory=list, max_length=100)
     # 이 조합이 몇 개의 후보 중에서 뽑혔는지. BE 가 정렬한 후보 전체 수다.
     # 기준 카탈로그 1,706개 중 1,645개는 제휴 혜택도 약정할인도 없어 절감액이 0이다.

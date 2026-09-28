@@ -664,3 +664,9 @@ def test_notice_length_is_counted_like_the_backend():
         {"field": "hasFamilyBundle", "impact": "가" * 290 + "🎉" * 10}]}
     assert narrate(request).json()["notices"] == []
 
+
+
+def test_many_breakdown_lines_do_not_drop_the_explanation():
+    """BE 는 등급 200개까지 받는다. 100줄을 넘으면 422 → 설명이 통째로 빠졌다."""
+    lines = [{"label": f"구독{i}", "amount": 1000, "provenance": "OFFICIAL"} for i in range(150)]
+    assert narrate_breakdown(lines).status_code == 200

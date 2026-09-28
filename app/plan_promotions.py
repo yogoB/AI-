@@ -34,7 +34,8 @@ PRICE_BLOCK = re.compile(r"월\s*([\d,]+)\s*원\s*(\d{1,2})개월\s*이후\s*([\
 class PromotionsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    productIds: list[Annotated[int, Field(ge=1, le=99_999_999)]] = Field(min_length=1, max_length=30)
+    # 상한은 BE 의 long 이다. 번호 하나가 좁은 상한을 넘으면 30개 묶음 전체가 422 였다 — 못 읽는 번호는 그 행만 실패다.
+    productIds: list[Annotated[int, Field(ge=1, le=9_223_372_036_854_775_807)]] = Field(min_length=1, max_length=30)
 
 
 class Promotion(BaseModel):

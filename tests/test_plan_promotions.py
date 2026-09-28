@@ -124,3 +124,16 @@ def test_a_page_is_not_started_unless_its_whole_timeout_fits_the_deadline(monkey
                               json={"productIds": [7752]}, headers=AUTH).json()
     assert calls == []
     assert payload["failures"] == [{"productId": 7752, "code": "CATALOG-SOURCE-UNAVAILABLE"}]
+
+
+def test_a_large_product_id_is_a_row_failure_not_a_batch_rejection(monkeypatch):
+    """BE 는 출처 URL 의 숫자를 그대로 넘긴다. 상한을 넘는 번호 하나가 30개 묶음 전체를 422 로 만들었다."""
+    async def fetch(url):
+        raise httpx.ConnectError("x")
+    monkeypatch.setattr(promo, "fetch_page", fetch)
+    monkeypatch.setattr(promo, "REQUEST_GAP_SECONDS", 0)
+    with TestClient(app) as client:
+        response = client.post("/operations/plans/promotions/check",
+                               json={"productIds": [100_000_000]}, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["failures"] == [{"productId": 100_000_000, "code": "CATALOG-SOURCE-UNAVAILABLE"}]

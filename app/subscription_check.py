@@ -15,7 +15,9 @@ router = APIRouter()
 MAX_BYTES = 1_000_000
 PRICE = r"([1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*)"
 # 이름표와 가격 사이. **다른 금액을 건너뛰지 못한다** — 이름표 뒤 첫 가격이 그 상품의 가격일 때만 붙는다.
-GAP = r"(?:(?!₩|\d\s?원|\d,\d).){0,150}?"
+# 첫 달·할인·특가·정상가를 지나서도 붙지 않는다 — 그 뒤 가격은 정가가 아닐 수 있고, 오류 없이 틀린 값이
+# 원문과 함께 제안되면 운영자는 믿고 승인한다. 이런 페이지는 CATALOG-SOURCE-CHANGED 로 사람에게 넘긴다.
+GAP = r"(?:(?!₩|\d\s?원|\d,\d|첫\s?달|할인|특가|정상가).){0,150}?"
 
 
 def monthly(labels: dict[str, str], price: str) -> dict[str, str]:
@@ -121,6 +123,10 @@ class CheckResponse(BaseModel):
     offers: list[Offer] = Field(min_length=1, max_length=20)
 
 
+# 취소선(<s>·<del>·<strike>)은 "더 이상 아닌 가격"이다. 읽지 않는다.
+HIDDEN_TAGS = ("script", "style", "noscript", "s", "del", "strike")
+
+
 class PageText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -128,11 +134,11 @@ class PageText(HTMLParser):
         self.parts = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style", "noscript"):
+        if tag in HIDDEN_TAGS:
             self.hidden += 1
 
     def handle_endtag(self, tag):
-        if tag in ("script", "style", "noscript"):
+        if tag in HIDDEN_TAGS:
             self.hidden = max(0, self.hidden - 1)
 
     def handle_data(self, value):

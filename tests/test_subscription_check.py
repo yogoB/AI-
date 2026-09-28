@@ -77,3 +77,22 @@ def test_fetch_rejects_redirect_non_html_and_oversized_pages(monkeypatch):
         monkeypatch.setattr(check.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
         with pytest.raises((httpx.HTTPError, ValueError)):
             asyncio.run(check.fetch_page(check.SOURCES['Apple Music'][0]))
+
+
+def test_a_promotional_or_struck_price_is_never_read_as_the_regular_price():
+    """바뀐 페이지가 오류 없이 **틀린 값**을 내면 운영자는 그 제안을 믿고 승인한다(원문이 붙어 권위 있어 보인다).
+    이름표와 가격 사이에 첫 달·할인·특가·정상가가 끼면 읽지 않고 실패한다. 취소선 가격은 읽지 않는다."""
+    rule = check.SOURCES['멜론'][2]['스트리밍']
+    label = '스트리밍클럽 정기결제 이용권'
+    for changed in (f'{label} 첫 달 100원, 이후 10,900원',
+                    f'{label} 3개월 50% 할인 5,450원',
+                    f'{label} 특가 7,900원'):
+        assert not re.search(rule, changed), changed
+    page = PageText_of(f'<p>{label} <s>정상가 12,000원</s> 10,900원</p>')
+    assert re.search(rule, page).group(1) == '10,900'
+
+
+def PageText_of(html):
+    parser = check.PageText()
+    parser.feed(html)
+    return re.sub(r"\s+", " ", " ".join(parser.parts))

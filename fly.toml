@@ -1,9 +1,9 @@
 # 요고비 AI 서버. **공개 IP 를 두지 않는다** — BE 만 사설망으로 부른다(BE_main/docs/architecture.md §2).
-# 주소는 `yogob-ai.flycast` 다: Fly 프록시를 지나는 사설 IPv6 라 멈춰 있는 머신도 요청이 깨운다.
+# 주소는 `yogob-narrator.flycast` 다(BE 의 NARRATOR_URL): Fly 프록시를 지나는 사설 IPv6 라 멈춰 있는 머신도 요청이 깨운다.
 # (`.internal` 은 프록시를 우회해 곧장 머신으로 가므로 autostop 과 같이 쓸 수 없다.)
 #
 # app 이름 주의: 같은 조직에 yogob(프론트)·yogob-api(BE)가 있다. 이름이 겹치면 나중 배포가 앞선 것을
-# 덮는다(2026-09-16 실제로 겪었다). 이 앱은 yogob-ai 로 분리한다.
+# 덮는다(2026-09-16 실제로 겪었다). 이 앱은 yogob-narrator 로 분리한다.
 app = "yogob-narrator"
 primary_region = "nrt"
 

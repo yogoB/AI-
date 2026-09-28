@@ -17,6 +17,10 @@ def test_internal_endpoints_reject_unauthorized_callers_before_processing(path, 
             assert api.post(path, json={}).status_code == 503
         monkeypatch.delenv("NARRATOR_INTERNAL_TOKEN")
         assert api.post(path, json={}).status_code == 503
+        # 토큰이 없는 서버는 건강하지 않다 — 모든 요청이 503 이다(2026-09-28).
+        assert api.get("/health").status_code == 503
+        # /health 자체는 인증 없이 부른다. 토큰이 설정돼 있으면 헤더 없이 200.
+        monkeypatch.setenv("NARRATOR_INTERNAL_TOKEN", "test-backend-only-token")
         assert api.get("/health").status_code == 200
 
 

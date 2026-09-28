@@ -17,3 +17,10 @@ def test_api_docs_are_not_served():
         assert client.get("/docs").status_code == 404
         assert client.get("/openapi.json").status_code == 404
 
+
+
+def test_health_is_not_ok_without_the_backend_token(monkeypatch):
+    """토큰이 빠진 배포는 모든 요청이 503 인데 /health 만 200 이라 배포가 건강해 보였고, BE 는 조용히 물러났다."""
+    monkeypatch.setenv("NARRATOR_INTERNAL_TOKEN", "")
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 503

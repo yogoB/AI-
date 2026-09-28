@@ -12,11 +12,15 @@ from app.plan_promotions import router as plan_promotions_router
 from app.subscription_check import router as subscription_check_router
 
 
+def token_is_set(token: str) -> bool:
+    return bool(token) and all(33 <= ord(character) <= 126 for character in token)
+
+
 async def require_backend(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))],
 ) -> None:
     token = os.getenv("NARRATOR_INTERNAL_TOKEN", "")
-    if not token or any(not 33 <= ord(character) <= 126 for character in token):
+    if not token_is_set(token):
         raise HTTPException(status_code=503, detail={"code": "NARRATOR-AUTH-001"})
     if credentials is None or not secrets.compare_digest(credentials.credentials.encode(), token.encode()):
         raise HTTPException(status_code=401, detail={"code": "NARRATOR-AUTH-001"},
@@ -34,4 +38,7 @@ for router in (narrate_router, detections_router, switch_timing_router,
 
 @app.get("/health")
 async def health() -> dict[str, str]:
+    # 토큰이 없으면 모든 요청이 503 이다. 그런데 여기만 200 이면 빠진 배포가 건강해 보이고 BE 는 조용히 물러난다.
+    if not token_is_set(os.getenv("NARRATOR_INTERNAL_TOKEN", "")):
+        raise HTTPException(status_code=503, detail={"code": "NARRATOR-AUTH-001"})
     return {"status": "ok"}

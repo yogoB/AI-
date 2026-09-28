@@ -81,3 +81,9 @@ def test_switch_now_after_the_contract_ended_does_not_show_zero_months_left():
     note = explain(switchingCost=200000, paybackMonths=40, remainingContractMonths=0).json()["note"]
     assert "약정 잔여 0개월" not in note
     assert "전환비용 200,000원을 40개월이면 회수해요." in note
+
+
+def test_no_benefit_with_a_higher_price_says_it_costs_more():
+    """옮기면 매달 더 내는데 "절감이 없어요"는 덜 말한 것이다. BE 가 준 음수를 부호 없이 적기만 한다."""
+    note = explain(status="NO_BENEFIT", paybackMonths=None, monthlySavings=-4000).json()["note"]
+    assert "옮기면 월 4,000원 더 내요." in note

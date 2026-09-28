@@ -68,6 +68,9 @@ def korean_day(value: str) -> str:
 
 def note_for(request: SwitchTimingRequest) -> str:
     if request.status == "NO_BENEFIT":
+        if request.monthlySavings < 0:
+            # 더 내는 것은 더 낸다고 말한다. BE 가 준 값의 부호만 뗀다.
+            return f"옮기면 월 {abs(request.monthlySavings):,}원 더 내요. 아래 일정은 참고용이에요."
         return "지금 조건에서는 옮겨도 절감이 없어요. 아래 일정은 참고용이에요."
 
     if request.status == "WAIT_UNTIL_EXPIRY":
