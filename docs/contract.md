@@ -140,6 +140,8 @@ D-19(2026-09-16): `reasons`를 응답에 더했다. 요청 필드는 그대로�
   근거는 `breakdown` 항목뿐이므로 미사용 혜택은 사유에도 등장하지 않는다.
 - **`currentMonthlyTotal`(선택, 원)** — 지금 쓰는 요금제로 같은 구독을 유지했을 때의 실질월비용
   (BE 응답 `current.cost.monthlyTotal`). BE 는 `optional.currentPlanId` 를 받았을 때만 싣고,
+  그것이 없고 사용자가 지금 내는 월 통신비(`optional.currentMonthlyPayment`)를 줬으면 응답 `paid` 의 값을 같은 자리에 싣는다
+  (G-94, 2026-10-01 — 내레이터 요청 필드는 그대로다).
   없으면 필드 자체를 넣지 않는다. **있으면 절감의 기준이 정가가 아니라 지금이다.**
   - `monthlyTotal < currentMonthlyTotal` → "지금 내시는 월 {현재}원보다 월 {차}원 덜 내요."
   - 같으면 → "지금 내시는 금액과 같아요."
