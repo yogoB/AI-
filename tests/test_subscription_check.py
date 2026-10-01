@@ -14,8 +14,11 @@ Premium 베이직 요금제는 ₩1,100(매월 기준), Premium 개인 요금제
 Premium 듀오 요금제는 ₩3,300(매월 기준), Premium 학생 요금제는 ₩4,400(매월 기준)입니다.</p>
 <p>무료 체험 ₩0</p>"""
 APPLE = '<h3>개인</h3><p>₩1,100/월, 첫 달 무료</p><h3>가족</h3><p>₩2,200/월</p>'
-ICLOUD = '<p>월별 가격</p>미국 50GB : 99원 대한민국(원) 5 ' + ' '.join(
-    f'{name} : {price}원' for name, price in zip(('50GB', '200GB', '2TB', '6TB', '12TB'), ('1,100', '2,200', '3,300', '4,400', '5,500'))) + ' 싱가포르 50GB : 999원'
+# 2026-10-01 실제 표 모양: 머리행 아래 국가별 행. 미국 행이 먼저 와도 대한민국 행만 읽어야 한다.
+ICLOUD = ('<p>월별 가격</p><table><tr><th>국가(통화)</th><th>50GB</th><th>200GB</th><th>2TB</th><th>6TB</th><th>12TB</th></tr>'
+          '<tr><td>미국(미국 달러)</td><td>99원</td><td>299원</td><td>999원</td><td>2,999원</td><td>5,999원</td></tr>'
+          '<tr><td>대한민국 5 (원)</td><td>1,100원</td><td>2,200원</td><td>3,300원</td><td>4,400원</td><td>5,500원</td></tr>'
+          '<tr><td>싱가포르(싱가포르 달러)</td><td>1.48달러</td></tr></table>')
 
 
 def test_only_regular_monthly_prices_from_the_right_region_are_extracted():
@@ -26,7 +29,10 @@ def test_only_regular_monthly_prices_from_the_right_region_are_extracted():
         with pytest.raises(ValueError):
             check.extract_offers('Apple Music', text)
     with pytest.raises(ValueError):
-        check.extract_offers('iCloud+', ICLOUD.replace('대한민국(원)', '다른나라(원)'))
+        check.extract_offers('iCloud+', ICLOUD.replace('대한민국 5 (원)', '다른나라 5 (원)'))
+    # 열 순서가 바뀌면 위치로 읽은 값이 엉뚱한 등급에 붙는다 — 읽지 않고 사람에게 넘긴다.
+    with pytest.raises(ValueError):
+        check.extract_offers('iCloud+', ICLOUD.replace('<th>50GB</th><th>200GB</th>', '<th>200GB</th><th>50GB</th>'))
 
 
 def test_a_label_never_borrows_the_next_cards_price():

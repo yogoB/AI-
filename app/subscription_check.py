@@ -42,9 +42,14 @@ SOURCES: dict[str, tuple[str, str | None, dict[str, str]]] = {
     }),
     "Apple Music": ("https://www.apple.com/kr/apple-music/", None,
                     {name: rf"{name} ₩{PRICE}/월" for name in ("개인", "가족")}),
-    # 세계 가격표에서 월별 표의 대한민국 블록만 읽는다. 다른 국가·통화로 폴백하지 않는다.
-    "iCloud+": ("https://support.apple.com/ko-kr/108047", r"월별 가격.*?(대한민국\(원\).*?)(?=싱가포르)",
-                {name: rf"(?<![\w]){name}\s*:\s*{PRICE}원" for name in ("50GB", "200GB", "2TB", "6TB", "12TB")}),
+    # 세계 가격표에서 월별 표의 대한민국 행만 읽는다. 다른 국가·통화로 폴백하지 않는다.
+    # 2026-10-01 표가 "50GB : 1,100원" 에서 열 형식으로 바뀌었다 — 머리행 "50GB 200GB 2TB 6TB 12TB" 아래
+    # "대한민국 5 (원) 1,100원 4,400원 …"(5 는 각주). **머리행 순서를 구간 조건으로 건다** — 열이 바뀌면
+    # 위치로 읽은 값이 다른 등급에 붙으므로, 그때는 구간을 못 찾아 사람에게 넘긴다.
+    "iCloud+": ("https://support.apple.com/ko-kr/108047",
+                r"월별 가격.*?국가\(통화\) 50GB 200GB 2TB 6TB 12TB .*?(대한민국 (?:\d )?\(원\) .*?)(?=싱가포르)",
+                {name: rf"^대한민국 (?:\d )?\(원\) (?:(?:{PRICE[1:-1]})원 ){{{i}}}{PRICE}원"
+                 for i, name in enumerate(("50GB", "200GB", "2TB", "6TB", "12TB"))}),
     "멜론": ("https://www.melon.com/buy/pamphlet/all.htm", None, monthly({
         "스트리밍 플러스": r"프리미엄 스트리밍 플러스 정기결제 이용권",
         "Hi-Fi 스트리밍": r"Hi-Fi스트리밍클럽 정기결제 이용권",
