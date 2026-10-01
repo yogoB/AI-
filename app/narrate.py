@@ -24,24 +24,6 @@ GROUNDABLE = {"OFFICIAL", "DERIVED", "USER_PROVIDED"}
 Reason = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")]
 Notice = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[^\r\n]+$")]
-# **"더 알려주시면 정확해져요" 문장에 넣을 필드만** 여기 적는다. 라벨 사전이 아니다.
-#
-# BE 의 `missingInputs` 는 두 가지를 같은 목록으로 보낸다:
-#   ① 요청 — "가족 결합 중이라면 할인액을 알려주세요"
-#   ② 통보 — "가족결합 할인 11,000원은 SKT 요금제에만 반영했어요"
-# 필드 이름만으로는 둘을 못 가른다. `familyBundleDiscountKrw` 가 실제로 양쪽에 다 쓰인다.
-# ②를 여기 넣으면 이미 답한 것을 다시 묻는 문장이 나간다 — 화면의 안내와 정면으로 어긋난다.
-# 그래서 **모르는 값은 이 문장에서 조용히 빠지는 것이 맞다.** 안내 원문은 `notices` 가 그대로 나른다.
-# 새 필드를 추가할 때는 BE 의 `impact` 문구를 읽고 ①인지 확인한 뒤에만 적는다.
-#
-# 2026-09-27: BE 가 networkType·ageLimit·wantedServiceIds·monthlyDataGb 를 **사실 통보로만** 보낸다
-# (BE G-75·G-77). 되물으면 망은 이미 골랐고, 가입 자격은 입력칸이 없고, 데이터는 필수 입력이라
-# 지킬 수 없는 약속이 된다. 요청으로 오는 셋만 남긴다.
-FIELD_LABELS = {
-    "currentCarrier": "현재 통신사",
-    "contractType": "약정 유형",
-    "hasFamilyBundle": "가족 결합 여부",
-}
 
 
 def backend_length(text: str) -> int:
@@ -164,6 +146,20 @@ def connective(word: str) -> str:
     return "로" if (ord(last) - 0xAC00) % 28 in (0, 8) else "으로"
 
 
+def promo_loss(request: "NarrateRequest") -> str | None:
+    """매달은 정가보다 싼데 1년 합계로는 아니면 그렇다고 말한다. 아니면 None.
+
+    BE 의 `annualSavings` 는 특가가 끝난 뒤 달을 다른 금액으로 더한 값이다(`CostResult.periodSavings`).
+    월이 양수인데 1년이 0 이하라면 특가 뒤 비싸지는 요금제다 — 월 절감만 말하면 1년을 속인다.
+    두 수 모두 BE 값을 옮기기만 한다(사용자 승인 2026-10-01). message 와 사유가 같은 문장을 쓴다.
+    """
+    annual = request.annualSavings
+    if request.monthlySavings <= 0 or annual is None or annual > 0:
+        return None
+    tail = "정가와 같아요" if annual == 0 else f"{abs(annual):,}원 더 내요"
+    return f"처음엔 정가보다 월 {request.monthlySavings:,}원 덜 내지만, 1년 합계로는 {tail}."
+
+
 def rule_reasons(request: "NarrateRequest") -> list[str]:
     """사유는 규칙이 만든다. BE가 준 값만 인용하므로 금액을 만들지 않는다(절대 원칙 2).
 
@@ -186,14 +182,17 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
                 f"“{item.label}”{connective(item.label)} 월 {abs(item.amount):,}원이 빠져요."
             )
     candidates = benefits + discounts
-    if request.monthlySavings > 0:
+    savings_now = current_savings(request)
+    if request.monthlySavings > 0 and (savings_now is None or savings_now > 0):
+        # 지금이 더 싸거나 같으면 "정가보다 덜 내세요"는 message 의 "지금보다 더 내요"와 싸운다(사용자 승인 2026-10-01).
         # 월·연을 한 문장에 담는다. 자리는 3개뿐이라 두 줄로 쪼개면 다른 근거가 밀린다.
         annual = request.annualSavings
         # "지금보다"가 아니라 "정가보다"다 — monthlySavings 는 baseline 기준이다.
         # message 가 `currentMonthlyTotal` 로 '지금'을 말하기 시작하면 같은 화면에서 두 수가 충돌한다.
         # 화면의 '정가 기준' 열과 같은 말을 쓴다.
         candidates.append(
-            f"정가보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
+            promo_loss(request) if promo_loss(request)
+            else f"정가보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
             if annual and annual > 0
             else f"정가보다 월 {request.monthlySavings:,}원 덜 내세요."
         )
@@ -251,7 +250,7 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         # 지금 내는 금액을 모르거나 두 수가 안 맞을 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
         sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
         if request.monthlySavings > 0:
-            sentences.append(f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
+            sentences.append(promo_loss(request) or f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
         else:
             # "월 -500원 절약" 은 읽히지 않는다 — 더 내는 것은 더 낸다고 말한다.
             sentences.append(f"정가보다 월 {abs(request.monthlySavings):,}원 더 내는 조합이에요.")
@@ -262,9 +261,8 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         elif savings == 0:
             sentences.append("지금 내시는 금액과 같아요.")
         else:
-            sentences.append(
-                f"지금보다 월 {abs(savings):,}원 더 내는 조합이에요 — 원하시는 데이터·구독을 다 담으면 이렇게 돼요."
-            )
+            # 왜 비싼지는 모른다 — 원인을 단정하지 않는다(사용자 승인 2026-10-01).
+            sentences.append(f"지금보다 월 {abs(savings):,}원 더 내는 조합이에요.")
 
     # 우리가 계산하지 않은 값은 그렇다고 밝힌다. 출처가 여럿이면 각각 한 문장이다.
     for source, note in SOURCE_NOTES.items():
@@ -274,11 +272,8 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
                     for item in request.breakdown if item.provenance == source]
         if labelled:
             sentences.append(f"{', '.join(labelled)} 항목은 {note}.")
-    known_fields = [FIELD_LABELS[item.field] for item in request.missingInputs
-                    if item.field in FIELD_LABELS]
-    if known_fields:
-        fields = ", ".join(dict.fromkeys(known_fields))
-        sentences.append(f"추가로 {fields} 정보를 알려주시면 더 정확해져요.")
+    # 추가 입력 안내는 `notices` 가 BE 원문 그대로 나른다. message 에 "알려주시면"을 또 붙이면
+    # 같은 안내가 두 번 나가고, 사실 통보까지 되묻게 된다(사용자 승인 2026-10-01).
 
     return NarrateResponse(message=" ".join(sentences), reasons=rule_reasons(request),
                            notices=notices_for(request))

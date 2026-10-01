@@ -41,9 +41,10 @@ def test_contract_example_preserves_backend_amounts():
     assert response.json()["message"] == (
         "“SKT 5G 슬림+”의 실제 내시는 금액은 월 71,300원이에요. "
         "아무 할인 없이 정가로 내는 금액은 월 89,000원이에요. "
-        "월 17,700원 절약할 수 있어요. "
-        "추가로 가족 결합 여부 정보를 알려주시면 더 정확해져요."
+        "월 17,700원 절약할 수 있어요."
     )
+    # 추가 입력 안내는 message 가 아니라 notices 가 BE 원문 그대로 나른다.
+    assert response.json()["notices"]
 
 
 def test_backend_cost_result_metadata_is_accepted_without_changing_message():
@@ -93,8 +94,8 @@ def test_all_estimated_items_and_missing_inputs_are_explained():
     assert response.status_code == 200
     message = response.json()["message"]
     assert "“가족 결합 할인”(5,000원 할인), “부가서비스”(2,500원) 항목은 추정치예요." in message
-    assert message.endswith("추가로 가족 결합 여부, 약정 유형 정보를 알려주시면 더 정확해져요.")
-    assert message.count(".") == 5
+    assert "알려주시면" not in message
+    assert message.count(".") == 4
     assert "\n" not in message
     assert "|" not in message
 
@@ -179,7 +180,7 @@ def test_hypothetical_savings_from_missing_inputs_cannot_be_quoted():
                                  "impact": "가족 결합 시 최대 11,000원 추가 절감 가능"}]
     response = narrate(request)
     assert "11,000" not in " ".join(response.json()["reasons"])
-    assert "가족 결합 여부" in response.json()["message"]
+    assert "11,000" not in response.json()["message"]
 
 
 def test_the_exact_payload_backend_sends_is_accepted():
@@ -304,7 +305,8 @@ def test_a_new_missing_input_field_does_not_take_down_the_whole_explanation():
     message = response.json()["message"]
     # 아는 값만 문장에 넣는다. 모르는 값은 조용히 빠진다 — 없는 이름을 지어내지 않는다.
     # 가입 자격은 입력칸이 없는 **사실 통보**라 되묻지 않는다(BE G-77). 요청인 것만 남는다.
-    assert "추가로 가족 결합 여부 정보를 알려주시면 더 정확해져요." in message
+    assert "알려주시면" not in message
+    assert "가족 결합 시 결합할인이 추가로 반영돼요" in response.json()["notices"]
     assert "가입 자격" not in message
     assert "notInventedYet" not in message
 
@@ -534,11 +536,23 @@ def test_the_same_amount_is_said_plainly():
     assert "지금 내시는 금액과 같아요." in body["message"]
 
 
-def test_a_pricier_combination_says_so_and_says_why():
-    # 원하는 데이터·구독을 다 담으면 지금보다 비쌀 수 있다. 감추지 않는다.
+def test_a_pricier_combination_says_so_without_guessing_why():
+    # 지금보다 비싸면 감추지 않는다. 다만 왜 비싼지는 모른다 — 원인을 지어내지 않는다.
     body = narrate_with_current(60000)
-    assert "지금보다 월 11,300원 더 내는 조합이에요" in body["message"]
-    assert "원하시는 데이터·구독을 다 담으면" in body["message"]
+    assert "지금보다 월 11,300원 더 내는 조합이에요." in body["message"]
+    assert "—" not in body["message"]
+    # 같은 화면에서 "정가보다 덜 내세요"가 "지금보다 더 내요"와 싸우지 않는다.
+    assert all("덜 내" not in reason for reason in body["reasons"])
+
+
+def test_a_promotion_that_loses_over_a_year_says_so():
+    # 특가 뒤 비싸지는 요금제: 매달은 싸도 1년 합계(BE 값)는 정가보다 비싸다. 월만 말하면 1년을 속인다.
+    body = narrate(deepcopy(BREAKDOWN) | {"annualSavings": -6000}).json()
+    loss = "처음엔 정가보다 월 17,700원 덜 내지만, 1년 합계로는 6,000원 더 내요."
+    assert loss in body["message"] and loss in body["reasons"]
+    assert "절약할 수 있어요" not in body["message"]
+    even = narrate(deepcopy(BREAKDOWN) | {"annualSavings": 0}).json()
+    assert "1년 합계로는 정가와 같아요." in even["message"]
 
 
 def test_the_gap_is_quotable_so_a_reason_using_it_is_not_discarded():
