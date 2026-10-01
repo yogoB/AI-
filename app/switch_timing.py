@@ -22,6 +22,8 @@ HEADLINES = {
     "WAIT_UNTIL_EXPIRY": "약정 만료 후가 이득",
     "NO_BENEFIT": "절감 없음 · 참고용 일정",
 }
+# 월 절감은 양수인데 특가가 끝나 회수하지 못하는 NO_BENEFIT 의 배지.
+NEVER_RECOUPED = "전환비용 회수 불가 · 참고용 일정"
 
 
 class SwitchTimingRequest(BaseModel):
@@ -101,5 +103,5 @@ async def switch_timing(request: SwitchTimingRequest) -> SwitchTimingResponse:
     headline = HEADLINES[request.status]
     if request.status == "NO_BENEFIT" and request.monthlySavings > 0:
         # 매달은 싼데 "절감 없음" 배지는 아래 문장과 싸운다. 없는 것은 절감이 아니라 회수다.
-        headline = "전환비용 회수 불가 · 참고용 일정"
+        headline = NEVER_RECOUPED
     return SwitchTimingResponse(headline=headline, note=note_for(request))
