@@ -14,6 +14,9 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 COPY --from=build /app/.venv /app/.venv
 # 앱 소스만 넣는다. 테스트·문서는 .dockerignore 로 뺀다.
 COPY app ./app
+# root 로 돌리지 않는다. 앱은 읽기만 한다.
+RUN useradd --system --uid 10001 --no-create-home app
+USER 10001
 EXPOSE 8000
 # 요청당 하는 일은 외부 HTTP 대기뿐이라 워커를 늘릴 이유가 없다. 동시성은 asyncio 가 맡는다.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "요고비 내레이터 — 백엔드가 계산한 금액을 한국어 문장으로 바꾼다"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[standard-no-fastapi-cloud-cli]>=0.141.1",
+    # JSON 과 Bearer 토큰만 쓴다. [standard] 묶음(jinja2·multipart·email-validator·CLI·uvloop 등)은 공격면만 넓혔다.
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
 ]
