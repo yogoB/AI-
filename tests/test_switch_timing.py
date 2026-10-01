@@ -87,3 +87,11 @@ def test_no_benefit_with_a_higher_price_says_it_costs_more():
     """옮기면 매달 더 내는데 "절감이 없어요"는 덜 말한 것이다. BE 가 준 음수를 부호 없이 적기만 한다."""
     note = explain(status="NO_BENEFIT", paybackMonths=None, monthlySavings=-4000).json()["note"]
     assert "옮기면 월 4,000원 더 내요." in note
+
+
+def test_never_recouped_after_a_promotion_does_not_say_there_is_no_saving():
+    # BE 가 특가 뒤를 세어 영영 회수 못 한다고 판정하면 월 절감은 양수인 채 NO_BENEFIT 이 온다.
+    body = explain(status="NO_BENEFIT", paybackMonths=None, monthlySavings=5000, switchingCost=50000).json()
+    assert body["headline"] == "전환비용 회수 불가 · 참고용 일정"
+    note = body["note"]
+    assert note == "처음엔 월 5,000원 덜 내지만, 전환비용을 회수하지 못해요. 아래 일정은 참고용이에요."

@@ -71,6 +71,11 @@ def note_for(request: SwitchTimingRequest) -> str:
         if request.monthlySavings < 0:
             # 더 내는 것은 더 낸다고 말한다. BE 가 준 값의 부호만 뗀다.
             return f"옮기면 월 {abs(request.monthlySavings):,}원 더 내요. 아래 일정은 참고용이에요."
+        if request.monthlySavings > 0:
+            # 매달은 싸도 특가가 끝나 전환비용을 영영 회수하지 못하는 경우다(BE `SwitchTiming`, 2026-10-01).
+            # "절감이 없어요"는 화면의 월 절감과 어긋난다. 처음엔 싸다는 것과 회수 못 한다는 것을 둘 다 말한다.
+            return (f"처음엔 월 {request.monthlySavings:,}원 덜 내지만, 전환비용을 회수하지 못해요. "
+                    "아래 일정은 참고용이에요.")
         return "지금 조건에서는 옮겨도 절감이 없어요. 아래 일정은 참고용이에요."
 
     if request.status == "WAIT_UNTIL_EXPIRY":
@@ -93,4 +98,8 @@ def note_for(request: SwitchTimingRequest) -> str:
 
 @router.post("/narrate/switch-timing", response_model=SwitchTimingResponse)
 async def switch_timing(request: SwitchTimingRequest) -> SwitchTimingResponse:
-    return SwitchTimingResponse(headline=HEADLINES[request.status], note=note_for(request))
+    headline = HEADLINES[request.status]
+    if request.status == "NO_BENEFIT" and request.monthlySavings > 0:
+        # 매달은 싼데 "절감 없음" 배지는 아래 문장과 싸운다. 없는 것은 절감이 아니라 회수다.
+        headline = "전환비용 회수 불가 · 참고용 일정"
+    return SwitchTimingResponse(headline=headline, note=note_for(request))
