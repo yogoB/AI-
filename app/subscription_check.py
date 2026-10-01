@@ -32,6 +32,7 @@ def monthly(labels: dict[str, str], price: str) -> dict[str, str]:
 # URL을 요청으로 받지 않는다. 리다이렉트도 따르지 않아 내부망으로의 우회를 막는다.
 # 넣지 않은 것: 스크립트로 가격을 그리는 페이지(넷플릭스·티빙·웨이브·유튜브 등), 1MB 넘는 페이지(디즈니+),
 # 날짜가 박힌 보도자료·블로그(쿠팡플레이·YouTube Music) — 바뀔 수 없는 글을 점검하면 안심만 준다.
+# Notion 은 2026-10-01 뺐다: 월간/연간 결제 토글이 있고 정적 HTML 에 값이 한 벌뿐이라 어느 모드의 값인지 모른다.
 SOURCES: dict[str, tuple[str, str | None, dict[str, str]]] = {
     # FAQ는 프로모션 카드와 달리 대한민국의 월 정가를 명시한다.
     "Spotify": ("https://www.spotify.com/kr-ko/premium/", r"대한민국의 Spotify Premium 가격은.*?(?:입니다\.)", {
@@ -89,8 +90,6 @@ SOURCES: dict[str, tuple[str, str | None, dict[str, str]]] = {
     "Microsoft 365": ("https://www.microsoft.com/ko-kr/microsoft-365/basic", None, monthly(
         {name: rf"Microsoft 365 {name} ₩[\d,]+ /년" for name in ("Basic", "Personal", "Family", "Premium")},
         rf"₩{PRICE} /월")),
-    "Notion": ("https://www.notion.com/ko/pricing", None,
-               {name: rf"{name} ₩{PRICE} 1인/월" for name in ("플러스", "비즈니스")}),
     "Google One": ("https://one.google.com/about/plans?hl=ko", None, {
         "Basic 100GB": rf"Basic \(100GB\) ₩{PRICE}/월",
         "Google AI Plus 2TB": rf"Google AI Plus \(2TB\) ₩{PRICE}/월",
