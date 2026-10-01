@@ -86,6 +86,9 @@ class NarrateRequest(BaseModel):
     # 지금 대비 절감액(BE 응답 `current.monthlySavings` = 현재 − 추천). 음수면 추천이 더 비싸다.
     # 이 값이 오면 내레이터는 빼지 않고 옮기기만 한다 — 절대 원칙 1 을 글자 그대로 지킨다.
     currentMonthlySavings: int | None = None
+    # 지금 대비 1년 절감액(BE `current.annualSavings`). 특가가 끝난 뒤 달을 다른 금액으로 더한 값이다.
+    # 특가 뒤를 모르면 BE 가 비워 보낸다(null 이 아니라 필드가 없다). 월만 말하면 1년을 속이는 경우를 잡는다.
+    currentAnnualSavings: int | None = None
 
 
 class NarrateResponse(BaseModel):
@@ -122,7 +125,7 @@ def known_numbers(request: "NarrateRequest") -> set[int]:
         abs(value)
         for value in (request.monthlyTotal, request.baseline, request.monthlySavings,
                       request.annualSavings, request.candidateCount, request.currentMonthlyTotal,
-                      request.currentMonthlySavings, current_savings(request),
+                      request.currentMonthlySavings, request.currentAnnualSavings, current_savings(request),
                       *(item.amount for item in request.breakdown))
         if value is not None
     }
@@ -146,18 +149,18 @@ def connective(word: str) -> str:
     return "로" if (ord(last) - 0xAC00) % 28 in (0, 8) else "으로"
 
 
-def promo_loss(request: "NarrateRequest") -> str | None:
+def promo_loss(monthly: int, annual: int | None, basis: str) -> str | None:
     """매달은 정가보다 싼데 1년 합계로는 아니면 그렇다고 말한다. 아니면 None.
 
     BE 의 `annualSavings` 는 특가가 끝난 뒤 달을 다른 금액으로 더한 값이다(`CostResult.periodSavings`).
     월이 양수인데 1년이 0 이하라면 특가 뒤 비싸지는 요금제다 — 월 절감만 말하면 1년을 속인다.
     두 수 모두 BE 값을 옮기기만 한다(사용자 승인 2026-10-01). message 와 사유가 같은 문장을 쓴다.
+    `basis` 는 비교 기준 — "정가"(`annualSavings`) 또는 "지금"(`currentAnnualSavings`).
     """
-    annual = request.annualSavings
-    if request.monthlySavings <= 0 or annual is None or annual > 0:
+    if monthly <= 0 or annual is None or annual > 0:
         return None
-    tail = "정가와 같아요" if annual == 0 else f"{abs(annual):,}원 더 내요"
-    return f"처음엔 정가보다 월 {request.monthlySavings:,}원 덜 내지만, 1년 합계로는 {tail}."
+    tail = f"{basis}{'와' if basis == '정가' else '과'} 같아요" if annual == 0 else f"{abs(annual):,}원 더 내요"
+    return f"처음엔 {basis}보다 월 {monthly:,}원 덜 내지만, 1년 합계로는 {tail}."
 
 
 def rule_reasons(request: "NarrateRequest") -> list[str]:
@@ -191,10 +194,10 @@ def rule_reasons(request: "NarrateRequest") -> list[str]:
         # message 가 `currentMonthlyTotal` 로 '지금'을 말하기 시작하면 같은 화면에서 두 수가 충돌한다.
         # 화면의 '정가 기준' 열과 같은 말을 쓴다.
         candidates.append(
-            promo_loss(request) if promo_loss(request)
-            else f"정가보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
-            if annual and annual > 0
-            else f"정가보다 월 {request.monthlySavings:,}원 덜 내세요."
+            promo_loss(request.monthlySavings, annual, "정가")
+            or (f"정가보다 월 {request.monthlySavings:,}원, 1년이면 {annual:,}원 덜 내세요."
+                if annual and annual > 0
+                else f"정가보다 월 {request.monthlySavings:,}원 덜 내세요.")
         )
     if request.candidateCount and request.candidateCount > 1:
         # 혜택도 할인도 없는 요금제(기준 카탈로그의 96%)에는 이 문장이 유일한 근거다.
@@ -250,14 +253,15 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
         # 지금 내는 금액을 모르거나 두 수가 안 맞을 때만 정가를 기준으로 말한다. 화면의 '정가 기준' 열과 같은 수다.
         sentences.append(f"아무 할인 없이 정가로 내는 금액은 월 {request.baseline:,}원이에요.")
         if request.monthlySavings > 0:
-            sentences.append(promo_loss(request) or f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
+            sentences.append(promo_loss(request.monthlySavings, request.annualSavings, "정가") or f"월 {request.monthlySavings:,}원 절약할 수 있어요.")
         else:
             # "월 -500원 절약" 은 읽히지 않는다 — 더 내는 것은 더 낸다고 말한다.
             sentences.append(f"정가보다 월 {abs(request.monthlySavings):,}원 더 내는 조합이에요.")
     else:
         # 지금 내는 금액을 알면 그것이 기준이다. 사용자가 궁금한 것은 정가가 아니라 자기 요금이다.
         if savings > 0:
-            sentences.append(f"지금 내시는 월 {current:,}원보다 월 {savings:,}원 덜 내요.")
+            sentences.append(promo_loss(savings, request.currentAnnualSavings, "지금")
+                             or f"지금 내시는 월 {current:,}원보다 월 {savings:,}원 덜 내요.")
         elif savings == 0:
             sentences.append("지금 내시는 금액과 같아요.")
         else:

@@ -684,3 +684,14 @@ def test_many_breakdown_lines_do_not_drop_the_explanation():
     """BE 는 등급 200개까지 받는다. 100줄을 넘으면 422 → 설명이 통째로 빠졌다."""
     lines = [{"label": f"구독{i}", "amount": 1000, "provenance": "OFFICIAL"} for i in range(150)]
     assert narrate_breakdown(lines).status_code == 200
+
+
+def test_a_promotion_that_loses_against_the_current_plan_over_a_year_says_so():
+    # 지금보다 매달 싸도, BE 가 준 지금 대비 1년 절감이 0 이하면 그렇게 말한다(④-b).
+    body = narrate_with_current(90000, currentAnnualSavings=-3000)
+    assert "처음엔 지금보다 월 18,700원 덜 내지만, 1년 합계로는 3,000원 더 내요." in body["message"]
+    assert "지금 내시는 월 90,000원보다" not in body["message"]
+    assert "1년 합계로는 지금과 같아요." in narrate_with_current(90000, currentAnnualSavings=0)["message"]
+    # 1년도 이득이면 기존 문장 그대로다. 필드가 없어도(BE 가 특가 뒤를 모를 때) 그대로다.
+    for extra in ({"currentAnnualSavings": 224400}, {}):
+        assert "지금 내시는 월 90,000원보다 월 18,700원 덜 내요." in narrate_with_current(90000, **extra)["message"]
