@@ -279,5 +279,9 @@ async def narrate(request: NarrateRequest) -> NarrateResponse:
     # 추가 입력 안내는 `notices` 가 BE 원문 그대로 나른다. message 에 "알려주시면"을 또 붙이면
     # 같은 안내가 두 번 나가고, 사실 통보까지 되묻게 된다(사용자 승인 2026-10-01).
 
+    # 나가는 규칙은 하나다: 사유와 같은 금액 가드를 message 에도 건다. 문장을 고치다 숫자를 하나라도
+    # 만들어 넣으면 그 문장만 빠진다 — 틀린 금액을 안내하느니 덜 말한다(절대 원칙 2).
+    known = known_numbers(request)
+    sentences = [sentence for sentence in sentences if quotes_known_amounts_only(sentence, known)]
     return NarrateResponse(message=" ".join(sentences), reasons=rule_reasons(request),
                            notices=notices_for(request))

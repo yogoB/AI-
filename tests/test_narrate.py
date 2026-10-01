@@ -695,3 +695,46 @@ def test_a_promotion_that_loses_against_the_current_plan_over_a_year_says_so():
     # 1년도 이득이면 기존 문장 그대로다. 필드가 없어도(BE 가 특가 뒤를 모를 때) 그대로다.
     for extra in ({"currentAnnualSavings": 224400}, {}):
         assert "지금 내시는 월 90,000원보다 월 18,700원 덜 내요." in narrate_with_current(90000, **extra)["message"]
+
+
+def test_every_sentence_in_the_message_quotes_backend_amounts_only():
+    """사유만 가드를 지나고 message 는 그냥 나가고 있었다. 무작위 BE 모양 입력으로 전 분기를 훑는다.
+
+    BE 가 버리는 조건(빈 message, 줄바꿈, 사유 80자·3개, 안내 300자·10개 — UTF-16)도 같이 본다.
+    """
+    import random
+
+    from app.narrate import (NarrateRequest, backend_length, known_numbers, narrate as handler,
+                             quotes_known_amounts_only)
+    import asyncio
+
+    rng = random.Random(20261001)
+    for _ in range(400):
+        monthly, baseline = rng.randrange(0, 120_000), rng.randrange(0, 120_000)
+        payload = {
+            "monthlyTotal": monthly, "baseline": baseline, "monthlySavings": baseline - monthly,
+            "annualSavings": rng.choice([None, rng.randrange(-300_000, 300_000)]),
+            "planName": rng.choice(["5G 슬림+", "LTE 33", "데이터 100GB 플러스"]), "carrier": "SKT",
+            "breakdown": [{"label": rng.choice(["넷플릭스", "선택약정 25%", "가족 결합 할인"]),
+                           "amount": rng.randrange(-30_000, 30_000),
+                           "provenance": rng.choice(["OFFICIAL", "ESTIMATED", "USER_PROVIDED", "NEW_ONE"]),
+                           "note": rng.choice([None, "제휴 혜택 적용"])} for _ in range(rng.randrange(0, 5))],
+            "missingInputs": [{"field": "hasFamilyBundle", "impact": "가족 결합 시 최대 11,000원 추가 절감 가능"}],
+            "candidateCount": rng.choice([None, rng.randrange(1, 2000)]),
+        }
+        if rng.random() < 0.6:
+            current = rng.randrange(0, 120_000)
+            payload |= {"currentMonthlyTotal": current, "currentMonthlySavings": current - monthly}
+            if rng.random() < 0.7:
+                payload["currentAnnualSavings"] = rng.randrange(-300_000, 300_000)
+        request = NarrateRequest.model_validate(payload)
+        body = asyncio.run(handler(request))
+        known = known_numbers(request)
+        assert body.message and "\n" not in body.message
+        # 가드가 정상 입력의 문장을 버리지 않는다 — 첫 문장(실제 금액)이 늘 남는다.
+        assert body.message.startswith(f"“SKT {request.planName}”의 실제 내시는 금액은 월 {monthly:,}원이에요.")
+        for sentence in body.message.split(". "):
+            assert quotes_known_amounts_only(sentence, known), (payload, sentence)
+        assert "11,000" not in body.message   # 아직 반영 안 된 가정은 인용하지 않는다
+        assert len(body.reasons) <= 3 and all(backend_length(r) <= 80 for r in body.reasons)
+        assert len(body.notices) <= 10 and all(backend_length(n) <= 300 for n in body.notices)
